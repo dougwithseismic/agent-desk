@@ -1,0 +1,13 @@
+{
+  "name": "agent-desk",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "A kit for putting agent desks into a project",
+  "scripts": {
+    "test": "node --test test/desk.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.16"
+  }
+}

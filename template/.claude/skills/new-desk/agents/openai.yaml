@@ -1,0 +1,4 @@
+interface:
+  display_name: "New desk"
+  short_description: "Design and set up a new desk in this project"
+  default_prompt: "Use $new-desk to set up a desk for this project."

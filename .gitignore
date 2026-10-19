@@ -1,0 +1,12 @@
+data/
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+.wrangler/
+*.sqlite*
+*.db
+__pycache__/
+.DS_Store
+node_modules/

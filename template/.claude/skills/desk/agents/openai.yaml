@@ -1,0 +1,4 @@
+interface:
+  display_name: "Desk"
+  short_description: "Work this project's desks: status, rounds, reviews"
+  default_prompt: "Use $desk to show what needs attention and suggest the next step."
