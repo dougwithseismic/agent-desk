@@ -542,6 +542,50 @@ test('a reply carries In-Reply-To and References and threads with its parent', a
   assert.deepEqual(thread.body.messages.map((m) => m.direction), ['in', 'out', 'out']);
 });
 
+test('a check runs every refusal, and stores and sends nothing', async () => {
+  const t = setup({ FIRST_TOUCH_DAILY_LIMIT: 1 });
+  const ok = await t.api('POST', '/v1/send', email({ check: true }));
+  assert.deepEqual([ok.status, ok.body], [200, { ok: true, check: true, first_touch: true, subject: 'An idea for Acme' }]);
+  assert.equal(t.count(), 0);
+  assert.equal(t.EMAIL.attempts, 0);
+  assert.equal((await t.api('POST', '/v1/send', email())).status, 200, 'the key is still free');
+  const capped = await t.api('POST', '/v1/send', email({ key: 'b', to: ['new@else.example'], check: true }));
+  assert.deepEqual([capped.status, capped.body.cap], [429, 'first_touch_daily']);
+  await t.receive(rfc5322({ from: 'ann@else.example', messageId: 'ann-1@else.example' }), { from: 'ann@else.example' });
+  const known = await t.api('POST', '/v1/send', email({ key: 'c', to: ['ann@else.example'], check: true }));
+  assert.deepEqual([known.status, known.body.first_touch], [200, false], 'someone who wrote to the desk is no first touch');
+  const bad = await t.api('POST', '/v1/send', email({ key: 'd', cc: ['sam@acme'], check: true }));
+  assert.deepEqual([bad.status, bad.body.code], [400, 'BAD_INPUT']);
+  assert.equal((await t.api('POST', '/v1/send', email({ key: 'e', check: 'yes' }))).status, 400);
+  assert.equal(t.count('messages WHERE direction = \'out\''), 1);
+  assert.equal(t.EMAIL.attempts, 1);
+});
+
+test('refused: a reply to an email the sender has written again since; the thread opens from any email in it', async () => {
+  const t = setup();
+  await t.receive(rfc5322({ subject: 'Terms?', messageId: 'jo-1@acme.example' }));
+  await t.receive(rfc5322({ subject: 'Re: Terms?', messageId: 'jo-2@acme.example', inReplyTo: 'jo-1@acme.example' }));
+  const [first, second] = t.rows();
+  assert.equal(second.thread_id, first.thread_id);
+  const reply = (parent, more = {}) => t.api('POST', '/v1/send', { key: `reply:${parent.id}`, from: DESK, reply_to: parent.id, text: 'Ten percent.', approved: true, ...more });
+
+  for (const more of [{ check: true }, {}]) {
+    const stale = await reply(first, more);
+    assert.deepEqual([stale.status, stale.body.code, stale.body.id], [409, 'STALE', second.id]);
+    assert.match(stale.body.error, new RegExp(`^jo@acme.example wrote again at .* \\(${second.id}\\), after the email this answers`));
+  }
+  assert.equal(t.EMAIL.attempts, 0);
+
+  // An automatic reply in the thread isn't someone writing again.
+  await t.receive(rfc5322({ subject: 'Out of office', messageId: 'ooo@acme.example', inReplyTo: 'jo-2@acme.example', headers: { 'Auto-Submitted': 'auto-replied' } }));
+  assert.equal((await reply(second)).status, 200);
+
+  for (const id of [first.thread_id, second.id, t.rows("direction = 'out'")[0].id]) {
+    const thread = await t.api('GET', `/v1/threads/${id}`);
+    assert.deepEqual([thread.body.thread, thread.body.messages.length], [first.thread_id, 4]);
+  }
+});
+
 test('refused: a send without approved: true', async () => {
   const t = setup();
   for (const approved of [undefined, false, 'yes', 1]) {

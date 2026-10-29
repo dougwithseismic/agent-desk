@@ -135,13 +135,23 @@ export async function listMessages(db, query) {
   return results;
 }
 
-/** A conversation, oldest first. */
-export async function threadMessages(db, threadId) {
+/** A conversation, oldest first: by its thread id, or by the id of an email in it. */
+export async function threadMessages(db, id) {
   const { results } = await db
-    .prepare('SELECT * FROM messages WHERE thread_id = ?1 ORDER BY seq LIMIT 500')
-    .bind(threadId)
+    .prepare(`SELECT * FROM messages WHERE thread_id = coalesce((SELECT thread_id FROM messages WHERE id = ?1), ?1)
+      ORDER BY seq LIMIT 500`)
+    .bind(id)
     .all();
   return results;
+}
+
+/** The latest email from outside that came into a thread after `seq`, or null. */
+export async function laterInThread(db, threadId, seq) {
+  return db
+    .prepare(`SELECT id, mailbox, from_addr, created_at FROM messages
+      WHERE thread_id = ?1 AND seq > ?2 AND direction = 'in' AND own = 0 AND auto = 0 ORDER BY seq DESC LIMIT 1`)
+    .bind(threadId, seq)
+    .first();
 }
 
 /** Sends counted against the caps since `since` (ISO), across every sender. */

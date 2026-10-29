@@ -34,10 +34,11 @@ row for every move.
 ```sh
 node desks/desk.mjs sql -a body=@desks/data/outreach/acme-reply.txt - <<'SQL'
 INSERT INTO actions(desk, key, kind, channel, identity, about, target, title, body, payload, evidence, why_human, created_by)
-VALUES ('outreach', 'reply:gmail:18c2f9a', 'email-reply', 'email', 'doug@partners.example.com',
+VALUES ('outreach', 'reply:mail:5d1e', 'email-reply', 'email', 'doug@partners.example.com',
   'brand:acme', 'email:jo@acme.com', 'Re: PPC terms', :body,
-  json_object('thread', 'gmail:18c2f9a', 'cc', json_array('doug@example.com'), 'files', json_array()),
-  json_array('gmail:18c2f9a', 'awin:programme/12345'),
+  json_object('thread', 'mail:5d1e', 'reply_to', 'mail:doug@partners.example.com:0b7c',
+    'cc', json_array('doug@example.com')),
+  json_array('mail:doug@partners.example.com:0b7c', 'awin:programme/12345'),
   'still learning their words; mentions commission', :me);
 SELECT id, stage FROM actions WHERE id = last_insert_rowid();
 SQL
@@ -47,7 +48,7 @@ Read the stage back with that `SELECT`, in the same call. `RETURNING` shows the 
 before the database sets its stage, so it always says `drafted`.
 
 - **key**: where the work came from plus what it's for, stable, so the same work is never
-  prepared twice. Examples: `reply:gmail:<thread>`, `first-touch:brand:acme`,
+  prepared twice. Examples: `reply:mail:<thread>`, `first-touch:brand:acme`,
   `title:page:/stores/nike:2026-10`. A second deliberate try gets its own key
   (`...:retry1`).
 - **kind, channel, identity**: what it is, where it goes, who it acts as. Trust is earned
@@ -55,8 +56,9 @@ before the database sets its stage, so it always says `drafted`.
 - **about** is the thing it concerns. **target** is the exact recipient or object. Put
   copies in `payload` as `{"cc": [...], "bcc": [...]}`, addresses only. Holds and locks
   are checked against all of them, their domains, and the people behind them.
-- **payload**: everything else that makes it this action. That covers the thread to reply
-  in, files with their sha256, form fields, and the exact change. The provider's
+- **payload**: everything else that makes it this action. That covers the thread and the
+  email it answers (`reply_to`, its inbox id), files with their sha256, form fields, and
+  the exact change. The provider's
   signature is part of the content: include it, or turn it off and write it in the body.
 - **evidence**: references someone could reopen.
 - **why_human**: every reason it waits, in plain words. Leave it null only for a draft
@@ -116,6 +118,26 @@ UPDATE actions SET status = 'rejected', result = 'wrong brand', last_by = :me WH
 
 ## Send
 
+**Email through the project's mail Worker** is one command, which does steps 1 to 4:
+
+```sh
+node desks/desk.mjs send 12
+```
+
+First it checks the email can go as stored: from one of the desk's own addresses, with a
+payload of `cc`, `bcc`, `reply_to` and `thread` only, and with the Worker saying it would
+take it (senders, caps, the never-contact list, nobody writing again after the email it
+answers, and a subject that is exactly the title: a reply's title starts `Re:`). Then it
+claims it (as `human` when approved, as `auto` when it's a draft), sends exactly the
+stored title and body to `target`, with `payload.cc` and `bcc`, threaded under
+`payload.reply_to`, and records `sent`, `failed` or `uncertain` at once. When it says "not
+sent", nothing changed: do what it says. Then verify it (step 5) with the `mail thread`
+command it prints. `uncertain` is never sent again:
+`node desks/desk.mjs mail sent --key '<key>'` shows whether the Worker sent it, so settle
+it from that.
+
+Anything else goes step by step:
+
 1. **Claim it.** The claim is the status change itself. Exactly one worker gets the row
    back; anyone else gets nothing back, or the refusal "already being sent":
 
@@ -130,8 +152,7 @@ UPDATE actions SET status = 'rejected', result = 'wrong brand', last_by = :me WH
    recipients and file hashes, and check the provider is healthy and within limits. If
    anything changed, set it back with `status = 'failed'`, `result = 'not sent: <why>'`,
    then prepare a new action.
-3. **Do exactly the stored version** with the desk's tool (mail command, API, browser,
-   PR).
+3. **Do exactly the stored version** with the desk's tool (API, browser, PR).
 4. **Record what happened at once.** If the provider took it, set `status = 'sent'` with
    `provider_ref` = its id. If it refused, set `status = 'failed'` with what it said in
    `result`. A timeout, a crash, or anything you can't be sure of is `status = 'uncertain'`.

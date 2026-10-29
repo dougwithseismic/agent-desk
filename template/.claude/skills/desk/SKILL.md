@@ -88,8 +88,10 @@ mail settings in `desks/.env`; if `watch` says one is missing, tell them what to
    wakes you.
 3. When it prints mail (`mail <inbox id> from <address> to <address>`) or a handover
    (`handover ...`), do the inbox step for exactly those emails, by `conversations.md`:
-   read the thread from the mail Worker, record it in `inbox`, and prepare what's needed.
-   Show any action waiting in full, and send only what the database lets go on its own.
+   read the thread (`node desks/desk.mjs mail thread <inbox id>`), record it in `inbox`,
+   and prepare what's needed. Show any action waiting in full. Send with
+   `node desks/desk.mjs send <action id>`: what the person approved, and drafts the
+   database lets go on their own.
    A wake is not a round: no new outreach, no building, no measuring.
 4. Start `watch` again. On "no new mail", start it again without saying anything.
 5. If it fails, say what failed in one line and stop listening. If the failure is clearly

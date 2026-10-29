@@ -32,15 +32,17 @@ Add `--check` to see what would change without changing anything.
 A desk that talks by email has its own addresses (a `Mail:` line in its `desk.md`), on a
 subdomain whose mail goes to the project's mail Worker. Say "/desk partners listen" and
 that session answers mail as it arrives: `node desks/desk.mjs watch partners` waits in the
-background with no model running, and wakes the session when mail lands. One desk is one
-agent at work, and a project can have as many as it needs. Desks never read the person's
-own inbox.
+background with no model running, and wakes the session when mail lands. The desk reads
+its mail with `node desks/desk.mjs mail`, and `node desks/desk.mjs send <action id>` sends
+an approved reply exactly as stored and records what happened. One desk is one agent at
+work, and a project can have as many as it needs. Desks never read the person's own inbox.
 
 ## What lands in a project
 
 ```text
 desks/
-  desk.mjs          the one script: init, status, sql, lock, take, export, dump, doctor
+  desk.mjs          the one script: init, status, sql, lock, take, export, dump, doctor,
+                    and watch, mail and send for desks that answer mail
   kit/              core schema, playbooks, guide and worked examples (replaced on update)
   .env              DESK_USER, and the hosted database's address and token (never in git)
   data/             the local database and private files (never in git)

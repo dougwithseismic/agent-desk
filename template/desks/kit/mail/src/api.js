@@ -173,7 +173,7 @@ async function message({ env, params: [id] }) {
 async function thread({ env, params: [id] }) {
   const rows = await threadMessages(env.DB, id);
   if (!rows.length) return json({ error: `No thread ${id}`, code: 'NOT_FOUND' }, 404);
-  return json({ thread: id, messages: rows.map((r) => present(r, { html: false })) });
+  return json({ thread: rows[0].thread_id, messages: rows.map((r) => present(r, { html: false })) });
 }
 
 async function sendRoute({ env, request }) {

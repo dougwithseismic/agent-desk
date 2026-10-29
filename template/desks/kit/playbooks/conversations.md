@@ -75,10 +75,12 @@ mail": note where you stopped.
    `mail:<address>:<id>` for mail from the kit's mail Worker.
    A forwarded copy is a new id linked to the same thread, so don't make new work from
    it.
-2. **Read the whole thread** before deciding what the latest message means. Look at
+2. **Read the whole thread** before deciding what the latest message means
+   (`node desks/desk.mjs mail thread <inbox id>`). Look at
    earlier asks, promises, who's on it now, and whether it's a real reply, an
    out-of-office, a bounce or an automated copy.
-3. **Check whether a person already answered** it: the thread, and the desk's sent mail.
+3. **Check whether a person already answered** it: the thread, and the desk's sent mail
+   (`node desks/desk.mjs mail sent --desk <name>`).
    If so, record that and don't draft a duplicate.
 4. **Record it and what you did:**
 

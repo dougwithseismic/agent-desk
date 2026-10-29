@@ -4,6 +4,18 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-10-29
 
+### Desks read their mail and send approved replies with one command (PRD 04) · New
+- `node desks/desk.mjs mail inbox --desk <name>` shows a desk the mail to its own
+  addresses; `read`, `thread`, `search` and `sent` open the rest. Nothing in an email can
+  drive your terminal.
+- `node desks/desk.mjs send <id>` sends exactly the version you approved, once, and
+  records what happened in the same step: sent, refused (in the Worker's words), or
+  "might have gone", which is never sent again.
+- Before it sends, it stops with nothing changed if the Worker wouldn't take the email
+  (cap reached, never-contact list, wrong sender), if the person wrote again since, or if
+  the subject would differ from the one you approved.
+- Try it: approve a reply on a desk with a `Mail:` line, then `node desks/desk.mjs send <id>`.
+
 ### The kit ships a mail Worker for your desks (PRD 03) · New
 - One Cloudflare Worker per project receives mail at the desks' own addresses, keeps and
   threads it, forwards you a copy, and sends the replies a desk has approved.

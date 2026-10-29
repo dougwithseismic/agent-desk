@@ -7,11 +7,11 @@ import {
   replyHeaders, replySubject, senders, unique,
 } from './mail.js';
 import {
-  findSendByKey, getMessage, hasWritten, insertOutbound, isKeyConflict, markFailed, markSent,
+  findSendByKey, getMessage, hasWritten, insertOutbound, isKeyConflict, laterInThread, markFailed, markSent,
   sendCounts, suppress, suppressed,
 } from './store.js';
 
-const FIELDS = new Set(['key', 'from', 'to', 'cc', 'bcc', 'subject', 'text', 'html', 'reply_to', 'approved']);
+const FIELDS = new Set(['key', 'from', 'to', 'cc', 'bcc', 'subject', 'text', 'html', 'reply_to', 'approved', 'check']);
 const MAX_KEY = 500;
 const MAX_RECIPIENTS = 50;
 
@@ -54,9 +54,11 @@ function replyRecipients(parent, own) {
 /**
  * Sends one approved email: { key, from, to[], cc?[], bcc?[], subject?, text, html?,
  * reply_to?, approved }. Refuses, storing nothing, an email without approved: true, a
- * sender not in SENDERS, a suppressed recipient, a key already sending or sent, or one
- * past a cap. Otherwise it's stored as sending, handed to Email Sending, and marked sent
- * with the Message-ID it returned, or failed with its error (502).
+ * sender not in SENDERS, a key already sending or sent, a reply to an email the sender
+ * has written again since, a suppressed recipient, or one past a cap. Otherwise it's
+ * stored as sending, handed to Email Sending, and marked sent with the Message-ID it
+ * returned, or failed with its error (502). With check: true it stops after the refusals,
+ * storing and sending nothing, and says the subject it would send, so a desk can ask first.
  */
 export async function send(env, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw badInput('Send a JSON object');
@@ -65,6 +67,8 @@ export async function send(env, input) {
   }
   const unknown = Object.keys(input).filter((k) => !FIELDS.has(k));
   if (unknown.length) throw badInput(`Unknown field ${unknown.join(', ')}: use ${[...FIELDS].join(', ')}`);
+
+  if (input.check !== undefined && typeof input.check !== 'boolean') throw badInput('check must be true or false');
 
   const key = typeof input.key === 'string' ? input.key.trim() : '';
   if (!key) throw badInput("Every send needs a key: the desk action's key");
@@ -99,11 +103,27 @@ export async function send(env, input) {
   const subject = parent ? replySubject(given ?? parent.subject) : given;
   if (!subject) throw badInput('A new email needs a subject');
 
+  // The lookups don't depend on each other; the refusals below go in order.
+  const { day, month } = periods();
+  const [earlier, later, blocked, written, today, thisMonth] = await Promise.all([
+    findSendByKey(env.DB, key),
+    parent ? laterInThread(env.DB, parent.thread_id, parent.seq) : null,
+    suppressed(env.DB, unique(recipients.map(canonicalAddress))),
+    parent ? true : hasWritten(env.DB, recipients),
+    sendCounts(env.DB, day),
+    sendCounts(env.DB, month),
+  ]);
+
   // A retry after a timeout must not send twice.
-  const earlier = await findSendByKey(env.DB, key);
   if (earlier) throw duplicate(key, earlier);
 
-  const blocked = await suppressed(env.DB, unique(recipients.map(canonicalAddress)));
+  // A reply answers the latest word: not an email they have written again since.
+  if (later) {
+    throw new MailError(409, 'STALE', `${later.from_addr} wrote again at ${later.created_at} (${later.id}), after the email this answers: read that first, and reply to it if the reply still stands`, {
+      id: later.id, mailbox: later.mailbox,
+    });
+  }
+
   if (blocked.length) {
     throw new MailError(409, 'SUPPRESSED', `Suppressed: ${blocked.map((b) => `${b.address} (${b.reason})`).join(', ')}`, {
       addresses: blocked.map((b) => b.address),
@@ -111,10 +131,7 @@ export async function send(env, input) {
   }
 
   // Caps count every send through the Worker: the project's desks share a sending domain.
-  const firstTouch = !parent && !(await hasWritten(env.DB, recipients));
-  const { day, month } = periods();
-  const today = await sendCounts(env.DB, day);
-  const thisMonth = await sendCounts(env.DB, month);
+  const firstTouch = !written;
   const checks = [
     ['daily', today.sends],
     ['monthly', thisMonth.sends],
@@ -128,6 +145,8 @@ export async function send(env, input) {
       });
     }
   }
+
+  if (input.check) return { ok: true, check: true, first_touch: firstTouch, subject };
 
   const id = crypto.randomUUID();
   const threading = replyHeaders(parent);

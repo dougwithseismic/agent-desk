@@ -6,8 +6,11 @@ its desks. It:
 - receives mail at the desks' own addresses (Email Routing), and refuses any other address;
 - stores and threads every email in D1, and forwards a copy to you, so you can read along;
 - tells a listening desk about new mail (`node desks/desk.mjs watch <desk>`);
-- sends the replies a desk has approved (Email Sending), within daily and monthly caps,
-  never to a suppressed address and never twice for the same action.
+- shows desks their mail (`node desks/desk.mjs mail inbox --desk <desk>`, `read`,
+  `thread`, `search`, `sent`, `status`);
+- sends the replies a desk has approved (Email Sending, through
+  `node desks/desk.mjs send <action id>`), within daily and monthly caps, never to a
+  suppressed address and never twice for the same action.
 
 The code is here, in `desks/kit/mail/`, and is replaced when the kit is updated. The
 project's settings are in `desks/mail/wrangler.jsonc`, which the kit never touches.
@@ -90,15 +93,18 @@ Errors are `{ "error": "<what to do>", "code": "<CODE>", ... }`.
 | `GET /v1/changes?mailbox=<a>[&mailbox=<b>]&after=<cursor\|latest>[&limit=1-100]` | New inbound mail for those addresses, oldest first (the contract below) |
 | `GET /v1/messages?mailbox=&direction=in\|out&auto=&own=&thread=&key=&q=&limit=` | Mail, newest first, with a snippet of each |
 | `GET /v1/messages/<id>` | One email whole: `text`, `fresh` (the text without the quoted thread), `html`, headers |
-| `GET /v1/threads/<thread>` | A conversation, oldest first |
+| `GET /v1/threads/<thread>` | A conversation, oldest first; the id of an email in it works too |
 | `POST /v1/send` | Sends one approved email (below) |
 | `GET /v1/status` | Mailboxes, senders, caps used today and this month, inbox counts |
 | `GET /v1/suppressions`, `POST /v1/suppressions`, `DELETE /v1/suppressions/<address>` | The never-contact list: `{ "address", "reason" }` |
 
 `POST /v1/send` takes `{ key, from, to[], cc?[], bcc?[], subject?, text, html?, reply_to?,
-approved: true }`. `key` is the desk action's key: a key that's sending or sent is never
-sent again. `reply_to` is a stored message id: the reply is threaded and, without `to`,
-goes to its sender. Unknown fields are refused, so a misspelt one can't send something else.
+approved: true }`. `key` is the action's key (`reply:mail:5d1e`): a key that's sending or
+sent is never sent again. `reply_to` is a stored message id: the reply is threaded and,
+without `to`, goes to its sender. Unknown fields are refused, so a misspelt one can't send something else.
+With `check: true` it runs every refusal below and answers `{ ok, check, first_touch,
+subject }`, storing and sending nothing: `desk.mjs send` asks that before it claims the
+action, and stops if the subject isn't the action's title.
 Refusals store nothing:
 
 | Status, code | Why |
@@ -107,6 +113,7 @@ Refusals store nothing:
 | 409 `NEEDS_APPROVAL` | `approved` isn't `true` |
 | 409 `SUPPRESSED` | A recipient is on the list (`addresses`) |
 | 409 `DUPLICATE` | That key was already sent or is sending (`id`, `status`) |
+| 409 `STALE` | A reply to an email the sender has written again since (`id`, `mailbox` of the newer one) |
 | 429 `CAP` | A cap is reached (`cap`, `used`, `limit`) |
 | 502 `SEND_FAILED` | Email Sending refused it; stored as failed (`id`, `provider_code`) |
 
@@ -135,3 +142,6 @@ with `Authorization: Bearer <token>`, answering:
 - `limit` defaults to 50; a full page means there may be more.
 - 400 for a missing `mailbox` or a bad `after`, 401 for a wrong token.
 - A desk records the message in its `inbox` as `mail:<mailbox>:<id>`.
+
+`watch` needs only that route. `desk.mjs mail` and `desk.mjs send` use the rest of the API
+above, including `check: true`, so they need the kit's Worker.

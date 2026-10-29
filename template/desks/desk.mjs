@@ -16,6 +16,12 @@
 //   node desks/desk.mjs token                     make a key and token for a hosted database
 //   node desks/desk.mjs watch <desk>              wait for mail to the desk's Mail: addresses, print a line
 //                                                 for each and exit (--every 30s, --max 25m)
+//   node desks/desk.mjs mail inbox|search <text>|sent   mail in the mail Worker (--desk, --mailbox, --limit,
+//                                                 --key for sent)
+//   node desks/desk.mjs mail read|thread <id>     one email in full, or its whole conversation
+//   node desks/desk.mjs mail status|suppressions  the Worker's addresses, sends and caps; who never gets mail
+//   node desks/desk.mjs mail suppress <address> "<reason>"
+//   node desks/desk.mjs send <action id>          send an approved email action exactly as stored, and record it
 //
 // In SQL, :me is you (DESK_USER), :now the time, :today the date and :desk the --desk value.
 // Add your own with -a name=value, or -a name=@path to read a file, so long text needs no
@@ -295,6 +301,12 @@ async function openHosted(url, token) {
   };
 }
 
+// Run SQL on a connection of its own, and close it: each statement's results.
+async function query(text, values = {}) {
+  const db = await open();
+  try { return (await execute(db, text, autoParams(values))).results; } finally { db.close(); }
+}
+
 // Run SQL text. Writes run all-or-nothing unless the SQL manages its own transaction.
 // A busy database is retried; nothing is retried after a lost connection, because the
 // change may have been saved.
@@ -397,6 +409,8 @@ function parseArgs(argv) {
     else if (a === '--desk') flags.desk = argv[++i];
     else if (a === '--where') flags.where = argv[++i];
     else if (a === '--every' || a === '--max') flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a time, such as 30s or 25m`);
+    else if (a === '--limit' || a === '--key') flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a value`);
+    else if (a === '--mailbox') flags.mailbox = [...(flags.mailbox ?? []), argv[++i] ?? fail('--mailbox needs an address')];
     else if (a === '-a' || a === '--arg') {
       const kv = argv[++i] ?? '';
       const eq = kv.indexOf('=');
@@ -624,6 +638,7 @@ const ago = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.rou
 
 // Text from outside (an id, an address), made safe to print as one word on one line.
 const oneWord = (s) => String(s ?? '').replace(/[\s\p{C}]/gu, '').slice(0, 200);
+const line1 = (s) => String(s ?? '').replace(/[\s\p{C}]+/gu, ' ').trim();
 const address = (s) => oneWord(String(s ?? '').match(/<([^<>\s]+@[^<>\s]+)>/)?.[1] ?? s);
 
 function duration(text, fallback, flag) {
@@ -634,29 +649,70 @@ function duration(text, fallback, flag) {
   return ms;
 }
 
-// GET from the project's mail Worker (kit/mail/README.md). A refused token or a request
-// it can't serve stops at once; no answer, a 5xx or a 429 may pass, so it's retryable.
-async function mailGet(route, query) {
+function mailSettings() {
+  const missing = [['DESK_MAIL_URL', MAIL_URL, "<the mail Worker's address>"], ['DESK_MAIL_TOKEN', MAIL_TOKEN, "<the Worker's MAIL_API_TOKEN>"]]
+    .filter(([, v]) => !v).map(([n, , what]) => `${n}=${what}`);
+  if (missing.length) fail(`set ${missing.join(' and ')} in desks/.env (kit/mail/README.md)`);
+  if (!/^https?:\/\/[^/]/.test(MAIL_URL)) fail(`DESK_MAIL_URL should start with https:// (it's the mail Worker's address), not "${MAIL_URL}"`);
+}
+
+// One request to the project's mail Worker (kit/mail/README.md): its HTTP status and its
+// answer, parsed (json is null when it isn't JSON). No answer at all throws, retryable.
+async function mailFetch(method, route, { query = [], body, timeout = 20000 } = {}) {
   const url = new URL(MAIL_URL + route);
   for (const [k, v] of query) url.searchParams.append(k, v);
-  const where = url.host;
   let res, text;
   try {
-    res = await fetch(url, { headers: { authorization: `Bearer ${MAIL_TOKEN}` }, signal: AbortSignal.timeout(20000) });
+    res = await fetch(url, {
+      method,
+      headers: { authorization: `Bearer ${MAIL_TOKEN}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeout),
+    });
     text = await res.text();
   } catch (e) {
-    throw retryable(`could not reach the mail Worker at ${where} (${e.cause?.code || e.name})`);
+    const why = e.cause?.code || e.name;
+    throw Object.assign(retryable(`could not reach the mail Worker at ${url.host} (${why})`), { why });
   }
-  if (res.status === 401 || res.status === 403) {
-    fail(`the mail Worker at ${where} refused DESK_MAIL_TOKEN (${res.status}): set it to the Worker's MAIL_API_TOKEN in desks/.env`);
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  return { status: res.status, json, text, host: url.host, location: res.headers.get('location') };
+}
+
+const said = (json, text) => line1(json?.error?.message ?? json?.error ?? json?.message ?? text).slice(0, 300);
+// What the Worker said when it refused for certain, so nothing went: one of its own codes
+// on a 4xx, or Email Sending's refusal (502 SEND_FAILED). Null for any other answer.
+const refusal = ({ status, json }) => (typeof json?.error === 'string' && json.code
+  && ((status >= 400 && status < 500 && status !== 408) || (status === 502 && json.code === 'SEND_FAILED')) ? said(json) : null);
+
+// A request whose answer we need. A refused token or a request the Worker can't serve
+// stops at once; no answer, a 5xx or a 429 may pass, so it's retryable.
+async function mailCall(method, route, options) {
+  const answer = await mailFetch(method, route, options);
+  const { status, json, text, host, location } = answer;
+  if (status === 401 || status === 403) {
+    fail(`the mail Worker at ${host} refused DESK_MAIL_TOKEN (${status}): set it to the Worker's MAIL_API_TOKEN in desks/.env`);
   }
-  if (res.status >= 500 || res.status === 408 || res.status === 429) throw retryable(`the mail Worker at ${where} answered ${res.status}`);
-  if (!res.ok) {
-    let said = text;
-    try { const j = JSON.parse(text); said = j.error?.message ?? j.error ?? j.message ?? text; } catch {}
-    fail(`the mail Worker at ${where} answered ${res.status} to ${route} (${String(said).replace(/\s+/g, ' ').slice(0, 200)}): check DESK_MAIL_URL is the desk mail Worker (kit/mail/README.md) and the desk's Mail: line`);
+  if (status >= 300 && status < 400) fail(`the mail Worker at ${host} redirects to ${line1(location)}: set DESK_MAIL_URL to that address`);
+  // The Worker's own refusals carry a code: refused says what it said.
+  const refused = refusal(answer);
+  if (refused) throw Object.assign(new DeskError(`the mail Worker at ${host} answered ${status} to ${route} (${refused})`), { refused });
+  if (status >= 500 || status === 408 || status === 429) throw retryable(`the mail Worker at ${host} answered ${status}`);
+  if (status < 200 || status >= 300) {
+    fail(`the mail Worker at ${host} answered ${status} to ${route} (${said(json, text)}): check DESK_MAIL_URL is the desk mail Worker (kit/mail/README.md) and the desk's Mail: line`);
   }
-  try { return JSON.parse(text); } catch { throw retryable(`the mail Worker at ${where} answered something that isn't JSON`); }
+  if (json === null) throw retryable(`the mail Worker at ${host} answered something that isn't JSON`);
+  return json;
+}
+const mailGet = (route, query) => mailCall('GET', route, { query });
+
+// The desk with that name, which must have a Mail: line.
+function mailDesk(desks, name) {
+  const desk = desks.find((d) => d.name === name);
+  if (!desk) fail(`no desk called ${name}: a desk is a folder in desks/ with a desk.md`);
+  if (!desk.mail.length) fail(`desks/${desk.name}/desk.md has no Mail: line: add "Mail: <address>" under its title, with the addresses this desk answers`);
+  return desk;
 }
 
 // Waits, with no model calls, for mail to the desk's own addresses and for mail another
@@ -665,18 +721,14 @@ async function mailGet(route, query) {
 // to stderr. One person listens to a desk: the lock listen:<desk>.
 async function watch(flags, deskName) {
   const name = deskName ?? deskOf(flags);
+  if (!name) fail('usage: desk.mjs watch <desk>');
   const desks = desksOnDisk();
-  const desk = desks.find((d) => d.name === name);
-  if (!desk) fail(name ? `no desk called ${name}: a desk is a folder in desks/ with a desk.md` : 'usage: desk.mjs watch <desk>');
-  if (!desk.mail.length) fail(`desks/${desk.name}/desk.md has no Mail: line: add "Mail: <address>" under its title, with the addresses this desk answers`);
+  const desk = mailDesk(desks, name);
   const clashes = mailClashes(desks).filter(([a]) => desk.mail.includes(a));
   if (clashes.length) {
     fail(`${clashes.map(([a, names]) => `${a} is in the Mail: line of ${names.join(' and ')}`).join('; ')}: an address belongs to one desk, so take it out of the others`);
   }
-  const missing = [['DESK_MAIL_URL', MAIL_URL, "<the mail Worker's address>"], ['DESK_MAIL_TOKEN', MAIL_TOKEN, "<the Worker's MAIL_API_TOKEN>"]]
-    .filter(([, v]) => !v).map(([n, , what]) => `${n}=${what}`);
-  if (missing.length) fail(`set ${missing.join(' and ')} in desks/.env (kit/mail/README.md)`);
-  if (!/^https?:\/\/[^/]/.test(MAIL_URL)) fail(`DESK_MAIL_URL should start with https:// (it's the mail Worker's address), not "${MAIL_URL}"`);
+  mailSettings();
   if (!USER) fail('set DESK_USER in desks/.env first, so the lock says who is listening');
   const every = duration(flags.every, 30000, '--every');
   const max = duration(flags.max, 25 * 60000, '--max');
@@ -686,10 +738,7 @@ async function watch(flags, deskName) {
   const { host, pathname } = new URL(MAIL_URL);
   const source = `${host}${pathname.replace(/\/$/, '')} ${[...own].sort().join(',')}`;
 
-  const q = async (text, values = {}) => {
-    const db = await open();
-    try { return (await execute(db, text, autoParams({ desk: desk.name, key, source, ...values }))).results; } finally { db.close(); }
-  };
+  const q = (text, values) => query(text, { desk: desk.name, key, source, ...values });
   let fails = 0;
   const attempt = async (step) => {
     for (;;) {
@@ -769,8 +818,7 @@ async function watch(flags, deskName) {
     const { mail, handed } = await attempt(poll);
     const events = [
       ...mail.map((m) => {
-        const mailbox = String(m.mailbox).toLowerCase();
-        return { event: 'mail', desk: desk.name, id: `mail:${mailbox}:${oneWord(m.id) || 'unknown'}`, mailbox,
+        return { event: 'mail', desk: desk.name, id: inboxId(m), mailbox: oneWord(m.mailbox).toLowerCase(),
           from: address(m.from) || 'unknown', auto: m.auto === true || m.auto === 1 };
       }),
       ...handed.map(([id, mailbox, from]) => ({ event: 'handover', desk: desk.name, id: oneWord(id), mailbox: oneWord(mailbox), from: address(from) || 'unknown' })),
@@ -785,6 +833,237 @@ async function watch(flags, deskName) {
     }
     await sleep(every);
   }
+}
+
+// ---------- mail: reading and sending through the Worker ----------
+
+// The inbox's id for an email, mail:<mailbox>:<id>, and the Worker's own id: both work.
+// A thread id may carry the mail: prefix too (mail:5d1e).
+const mailId = (id) => String(id ?? '').replace(/^mail:(?:[^:]*:)?/, '');
+const inboxId = (m) => `mail:${oneWord(m.mailbox).toLowerCase()}:${oneWord(m.id) || 'unknown'}`;
+// An email's text with its lines kept and anything that could drive a terminal taken out.
+const mailText = (s) => String(s ?? '').replace(/\r\n?/g, '\n').replace(/[^\P{C}\n\t]/gu, '');
+const when = (iso) => String(iso ?? '').replace('T', ' ').slice(0, 16);
+const addresses = (list) => (list ?? []).map(address).join(', ');
+
+function mailNotes(m) {
+  const notes = [m.direction === 'out' && (m.error ? `${m.status}: ${line1(m.error)}` : m.status),
+    m.auto && 'automatic', m.own && 'own copy', m.key && `key ${line1(m.key)}`].filter(Boolean);
+  return notes.length ? ` (${notes.join(', ')})` : '';
+}
+
+function mailList({ messages }) {
+  if (!messages.length) return '(no mail)';
+  return messages.map((m) => {
+    const who = m.direction === 'out' ? `to ${addresses(m.to)}` : `from ${address(m.from)}`;
+    const about = [line1(m.subject) || '(no subject)', line1(m.snippet)].filter(Boolean).join(' · ');
+    return `${when(m.created_at)}  ${inboxId(m)}  ${who}${mailNotes(m)}\n  ${about}`;
+  }).join('\n');
+}
+
+function mailRead(m) {
+  const head = [
+    ['id', inboxId(m)],
+    ['thread', oneWord(m.thread)],
+    ['from', m.from_name ? `${line1(m.from_name)} <${address(m.from)}>` : address(m.from)],
+    ['to', addresses(m.to)],
+    ['cc', addresses(m.cc)],
+    ['bcc', addresses(m.bcc)],
+    ['subject', line1(m.subject)],
+    ['date', `${line1(m.created_at)}${mailNotes(m)}`],
+    ['files', (m.attachments ?? []).map((f) => `${line1(f.filename) || 'unnamed'} (${line1(f.type)}, ${f.size} bytes)`).join(', ')],
+  ].filter(([, v]) => v);
+  return `${records(head.map(([k]) => k), [head.map(([, v]) => v)])}\n\n${mailText(m.text).trim()}`;
+}
+
+function mailThread({ thread, messages }) {
+  const top = `Thread ${oneWord(thread)}: ${line1(messages[0]?.subject) || '(no subject)'}, ${messages.length} email${messages.length === 1 ? '' : 's'}`;
+  return [top, ...messages.map((m) => `--- ${when(m.created_at)}  ${inboxId(m)}  from ${address(m.from)} to ${addresses(m.to)}${mailNotes(m)}\n\n${mailText(m.fresh || m.text).trim()}`)].join('\n\n');
+}
+
+function mailStatus(s) {
+  const caps = Object.entries(s.caps ?? {}).map(([name, c]) => `${name.replaceAll('_', ' ')} ${c.used} of ${c.limit} (${c.setting})`);
+  const inbox = Object.entries(s.inbox ?? {}).map(([box, n]) => `${box} ${n.today} today, ${n.total} in all`);
+  return [
+    `Mailboxes: ${(s.mailboxes ?? []).join(', ') || 'none'}`,
+    `Sends as: ${Object.entries(s.senders ?? {}).map(([a, n]) => (n ? `${n} <${a}>` : a)).join(', ') || 'nobody: SENDERS is empty'}`,
+    `Copies go to: ${(s.forward_to ?? []).join(', ') || 'nobody'}`,
+    `Sends: ${caps.join('; ')}`,
+    `Received: ${inbox.join('; ') || 'nothing yet'}`,
+  ].join('\n');
+}
+
+// The mailboxes a list reads: --mailbox, else the addresses of --desk, or of the only desk
+// that answers mail. With no such desk, every mailbox; with several, say which.
+function mailboxQuery(flags) {
+  if (flags.mailbox) return flags.mailbox.map((a) => ['mailbox', a]);
+  const desks = desksOnDisk();
+  const answering = desks.filter((d) => d.mail.length);
+  if (!flags.desk && answering.length > 1) fail(`say whose mail: --desk ${answering.map((d) => d.name).join(' or --desk ')}, or --mailbox <address>`);
+  const desk = flags.desk ? mailDesk(desks, flags.desk) : answering[0];
+  return (desk?.mail ?? []).map((a) => ['mailbox', a]);
+}
+
+async function mail(flags, [cmd, ...args]) {
+  mailSettings();
+  const show = (answer, text) => { console.log(flags.json ? JSON.stringify(answer, null, 2) : text(answer)); return 0; };
+  const limit = flags.limit === undefined ? [] : [['limit', String(flags.limit)]];
+  const list = async (query, scope = mailboxQuery(flags)) => show(await mailGet('/v1/messages', [...scope, ...query, ...limit]), mailList);
+  const usage = (what) => fail(`usage: desk.mjs mail ${cmd} ${what}`);
+  switch (cmd) {
+    case 'inbox': return list([['direction', 'in'], ['own', '0']]);
+    // A key belongs to one action, so it needs no desk.
+    case 'sent': return flags.key ? list([['direction', 'out'], ['key', flags.key]], []) : list([['direction', 'out']]);
+    case 'search':
+      if (!args.length) usage('<text>');
+      return list([['q', args.join(' ')]]);
+    case 'read':
+      if (!args[0]) usage('<id>');
+      return show(await mailGet(`/v1/messages/${encodeURIComponent(mailId(args[0]))}`), mailRead);
+    case 'thread':
+      if (!args[0]) usage('<thread id, or the id of an email in it>');
+      return show(await mailGet(`/v1/threads/${encodeURIComponent(mailId(args[0]))}`), mailThread);
+    case 'status': return show(await mailGet('/v1/status'), mailStatus);
+    case 'suppressions':
+      return show(await mailGet('/v1/suppressions'), ({ suppressions }) => table(['address', 'reason', 'since'],
+        suppressions.map((s) => [s.address, line1(s.reason), when(s.created_at)])));
+    case 'suppress':
+      if (!args[0] || !args[1]) usage('<address> "<reason>"');
+      return show(await mailCall('POST', '/v1/suppressions', { body: { address: args[0], reason: args.slice(1).join(' ') } }),
+        (d) => `The mail Worker will never send to ${d.address} (${line1(d.reason)}).`);
+    default:
+      fail('usage: desk.mjs mail inbox|read <id>|thread <id>|search <text>|sent|status|suppress <address> "<reason>"|suppressions');
+  }
+}
+
+// The email an action sends: exactly the stored version, from the desk's own address. Anything
+// that can't go as stored stops here.
+const EMAIL_PAYLOAD = new Set(['cc', 'bcc', 'reply_to', 'thread']);
+function emailFor(a, stop) {
+  const desk = desksOnDisk().find((d) => d.name === a.desk);
+  if (!desk) stop(`belongs to ${a.desk}, which has no folder in desks/ here`);
+  if (!desk.mail.includes(String(a.identity).toLowerCase())) {
+    stop(`is from ${a.identity}, which isn't in ${a.desk}'s Mail: line (${desk.mail.join(', ') || 'none'}): a desk sends as its own addresses`);
+  }
+  const to = String(a.target).match(/^email:(.+)$/)?.[1];
+  if (!to) stop(`goes to ${a.target}: an email goes to email:<address>`);
+  const p = JSON.parse(a.payload);
+  if (!p || typeof p !== 'object' || Array.isArray(p)) stop("has a payload that isn't a JSON object");
+  const other = Object.keys(p).filter((k) => !EMAIL_PAYLOAD.has(k));
+  if (other.length) stop(`has payload.${other.join(', payload.')}, which the mail Worker can't send: it sends text, with cc, bcc and reply_to`);
+  if (p.reply_to !== undefined && typeof p.reply_to !== 'string') stop("has payload.reply_to that isn't the id of an email");
+  const email = { key: a.key, from: a.identity, to: [to], subject: a.title, text: a.body, approved: true };
+  for (const k of ['cc', 'bcc']) if (p[k] !== undefined) email[k] = p[k];
+  if (p.reply_to) email.reply_to = mailId(p.reply_to);
+  return email;
+}
+
+// What the Worker's answer to a send means: sent, with its id; failed, when it refused for
+// certain; uncertain, for anything else.
+function sendOutcome(answer) {
+  const { status, json } = answer;
+  if (status >= 200 && status < 300 && json?.status === 'sent' && typeof json.id === 'string' && /^[\w-]{1,100}$/.test(json.id)) {
+    return { status: 'sent', ref: `mail:${json.id}`, result: null };
+  }
+  const refused = refusal(answer);
+  if (refused) return { status: 'failed', ref: null, result: `the mail Worker refused it: ${refused}` };
+  return { status: 'uncertain', ref: null, result: answer.lost ?? `the mail Worker answered ${status}${json ? `: ${said(json)}` : " with something that isn't JSON"}` };
+}
+
+// Sends one email action through the Worker: the Worker checks it, the database claims
+// it, the Worker sends exactly the stored version, and the answer is recorded at once. It
+// never retries: a send that might have gone is uncertain, and is settled by looking.
+async function send(flags, idText) {
+  const id = Number(idText);
+  if (!Number.isSafeInteger(id) || id < 1) fail('usage: desk.mjs send <action id>');
+  mailSettings();
+  if (!USER) fail('set DESK_USER in desks/.env first, so the send says who sent it');
+  const action = async () => {
+    const [found] = await query('SELECT desk, key, channel, identity, target, title, body, payload, status, sent_by, provider_ref FROM actions WHERE id = :id', { id });
+    return asObjects(found.cols, found.rows)[0];
+  };
+  const a = await action();
+  if (!a) fail(`no action ${id}`);
+  const stop = (why) => fail(`not sent: action ${id} ${why}`);
+  const look = `look with node desks/desk.mjs mail sent --key '${a.key}'`;
+
+  // What the database will be asked, and what it can't be asked at all.
+  if (a.channel !== 'email') stop(`goes out by ${a.channel}, not email: send it with the desk's own tool`);
+  const mode = { approved: 'human', draft: 'auto' }[a.status];
+  if (!mode) {
+    stop({
+      waiting: 'is waiting for a person: show it and ask',
+      sending: `is being sent by ${a.sent_by}. If that stopped mid-way, ${look} and settle it (together.md)`,
+      sent: `was sent already (${a.provider_ref})`,
+      verified: `was sent already (${a.provider_ref})`,
+      uncertain: `might have gone already, so it is never sent again: ${look}, then settle it as sent or failed`,
+      failed: 'failed, and that is final: a new try is a new action with a new key',
+    }[a.status] ?? `is ${a.status}`);
+  }
+  const email = emailFor(a, stop);
+
+  // Right before the claim, the Worker checks it as it would send it: sender, addresses,
+  // key, never-contact list, caps, and nobody writing again after the email it answers.
+  const checked = await mailCall('POST', '/v1/send', { body: { ...email, check: true } }).catch((e) => {
+    if (e.refused) stop(`stays ${a.status}: the mail Worker would refuse it: ${e.refused}`);
+    throw e;
+  });
+  if (checked.check !== true) {
+    stop(`stays ${a.status}, but the mail Worker didn't answer as a check, so it may have sent it: ${look}. send needs the kit's mail Worker (kit/mail/README.md)`);
+  }
+  if (checked.subject !== a.title) stop(`would go out with the subject "${line1(checked.subject)}": make that the title and show it again`);
+
+  // The claim. The database decides: approved, held, locked, trusted, spot check.
+  let claimed;
+  try {
+    [claimed] = await query(`UPDATE actions SET status = 'sending', mode = :mode, sent_by = :me, last_by = :me
+      WHERE id = :id AND status = :was RETURNING id`, { id, mode, was: a.status });
+  } catch (e) {
+    if (!(e instanceof DeskError)) throw e;
+    // A hosted database can take the claim and lose the answer: say so if it did.
+    const now = await action().catch(() => null);
+    const taken = now?.status === 'sending' && now.sent_by === USER;
+    fail(`not sent: ${e.message}${taken ? ` It shows as being sent by you, though nothing went: set it to failed with result 'not sent: the claim was lost'.` : ''}`);
+  }
+  if (!claimed.rows.length) stop('changed while it was being sent: read it again');
+
+  let answer;
+  try { answer = await mailFetch('POST', '/v1/send', { body: email, timeout: 60000 }); } catch (e) { answer = { lost: `no answer from the mail Worker (${e.why})` }; }
+  const outcome = sendOutcome(answer);
+
+  // Recorded at once. If the database can't take it, say exactly what to record.
+  const what = outcome.status === 'sent' ? `SENT (${outcome.ref})` : outcome.status.toUpperCase();
+  const record = `node desks/desk.mjs sql "UPDATE actions SET status = '${outcome.status}', provider_ref = ${literal(outcome.ref)}, last_by = :me WHERE id = ${id}"`;
+  let recorded;
+  for (let tries = 1; !recorded; tries++) {
+    try {
+      [recorded] = await query(`UPDATE actions SET status = :status, provider_ref = :ref, result = :result, last_by = :me
+        WHERE id = :id AND status = 'sending' RETURNING id`, { id, ...outcome });
+    } catch (e) {
+      // Only a database that didn't answer is worth asking again.
+      if (tries >= 3 || !(e.retry || 'unreached' in e)) {
+        fail(`${what}, but the database didn't take the record (${e.message}). Record it before anything else: ${record}`);
+      }
+      await sleep(1000);
+    }
+  }
+  if (!recorded.rows.length) {
+    // A retry finds it recorded when a hosted database took the first try and lost the answer.
+    const now = await action().catch(() => null);
+    if (now?.status !== outcome.status || now.provider_ref !== outcome.ref) {
+      fail(`${what}, but #${id} was changed while it was being sent, so this wasn't recorded. Read it, and record it by hand: ${record}`);
+    }
+  }
+
+  if (flags.json) console.log(JSON.stringify({ action: id, status: outcome.status, provider_ref: outcome.ref, result: outcome.result, key: a.key }));
+  else if (outcome.status === 'sent') {
+    console.log(`Sent #${id} to ${[email.to[0], ...(email.cc ?? [])].join(', ')} as ${a.identity}: recorded as sent (${outcome.ref}). It's in the thread: node desks/desk.mjs mail thread ${outcome.ref}`);
+  } else if (outcome.status === 'failed') {
+    console.error(`Not sent: ${outcome.result}. Recorded #${id} as failed, which is final: a new try is a new action with a new key.`);
+  } else {
+    console.error(`Might have gone: ${outcome.result}. Recorded #${id} as uncertain, so it is never sent again: ${look}, then settle it as sent or failed.`);
+  }
+  return outcome.status === 'sent' ? 0 : 1;
 }
 
 function csv(cols, rows) {
@@ -1032,6 +1311,8 @@ async function main() {
     case 'doctor': return doctor();
     case 'token': return token(flags);
     case 'watch': return watch(flags, args[0]);
+    case 'mail': return mail(flags, args);
+    case 'send': return send(flags, args[0]);
     case undefined: case 'help': case '--help': case '-h':
       console.log(help());
       return 0;
