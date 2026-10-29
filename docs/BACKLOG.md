@@ -20,7 +20,7 @@ What "desks answer mail as it arrives" needs before it's finished:
 
 ## Wave 1: desks answer mail as it arrives
 
-- [~] (building since 2026-10-29, lead) **PRD 01** `watch`: the `Mail:` line, the mail contract, the cursor and the listener
+- [x] (merged 2026-10-29) **PRD 01** `watch`: the `Mail:` line, the mail contract, the cursor and the listener
       (`docs/prds/01-watch.md`)
 - [ ] **PRD 02** Listening in the desk skill, and the mailbox rules (`docs/prds/02-listen.md`).
       Needs 01.
