@@ -26,7 +26,7 @@ What "desks answer mail as it arrives" needs before it's finished:
       Needs 01.
 - [~] (merged 2026-10-29; not yet deployed anywhere: needs a project's yes) **PRD 03** The kit's mail Worker (`docs/prds/03-mail-worker.md`). Needs 01's contract
       only.
-- [ ] **PRD 04** `desk.mjs mail` and `desk.mjs send <id>` (`docs/prds/04-mail-client.md`).
+- [~] (building since 2026-10-29, lead) **PRD 04** `desk.mjs mail` and `desk.mjs send <id>` (`docs/prds/04-mail-client.md`).
       Needs 03.
 - [ ] **PRD 05** Installing the mail Worker, and the end-to-end check
       (`docs/prds/05-install.md`). Needs 02, 03, 04.
