@@ -6,17 +6,18 @@
 
 What "desks answer mail as it arrives" needs before it's finished:
 
-- [ ] A desk with a `Mail:` line wakes its listening session within a minute of mail
-      arriving at its address.
-- [ ] Mail handed over by another desk wakes the right desk, once.
-- [ ] Only one person listens to a desk at a time, and two desks can't claim one address.
-- [ ] A project can stand up the kit's mail Worker from the kit alone (its config and one
+- [x] A desk with a `Mail:` line wakes its listening session within a minute of mail
+      arriving at its address. (`pnpm e2e`, with the Worker under `wrangler dev`)
+- [x] Mail handed over by another desk wakes the right desk, once.
+- [x] Only one person listens to a desk at a time, and two desks can't claim one address.
+- [~] A project can stand up the kit's mail Worker from the kit alone (its config and one
       deploy), and the Worker stores, threads and forwards mail, and sends approved replies
-      within caps, never to suppressed addresses and never twice.
+      within caps, never to suppressed addresses and never twice. (Stood up from the kit
+      alone under `wrangler dev`; no deploy yet: needs a project's yes.)
 - [x] A desk sends with `desk.mjs send <id>`: exactly the stored version, result recorded.
-- [ ] The playbooks say a desk owns its addresses and never reads the person's own inbox,
+- [x] The playbooks say a desk owns its addresses and never reads the person's own inbox,
       and alias sends BCC the desk's address.
-- [ ] Every guard has a test that fails without it, and `pnpm test` is green.
+- [x] Every guard has a test that fails without it, and `pnpm test` is green.
 
 ## Wave 1: desks answer mail as it arrives
 
@@ -28,7 +29,7 @@ What "desks answer mail as it arrives" needs before it's finished:
       only.
 - [~] (merged 2026-10-29; checked with `wrangler dev`, not against a deployed Worker: needs a project's yes) **PRD 04** `desk.mjs mail` and `desk.mjs send <id>` (`docs/prds/04-mail-client.md`).
       Needs 03.
-- [~] (building since 2026-10-29, lead; e2e on port 8799) **PRD 05** Installing the mail Worker, and the end-to-end check
+- [x] (merged 2026-10-29; `pnpm e2e` runs it against the real Worker under `wrangler dev`) **PRD 05** Installing the mail Worker, and the end-to-end check
       (`docs/prds/05-install.md`). Needs 02, 03, 04.
 
 ## Needs you
