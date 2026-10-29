@@ -24,7 +24,7 @@ What "desks answer mail as it arrives" needs before it's finished:
       (`docs/prds/01-watch.md`)
 - [x] (merged 2026-10-29) **PRD 02** Listening in the desk skill, and the mailbox rules (`docs/prds/02-listen.md`).
       Needs 01.
-- [~] (building since 2026-10-29, builder agent) **PRD 03** The kit's mail Worker (`docs/prds/03-mail-worker.md`). Needs 01's contract
+- [~] (merged 2026-10-29; not yet deployed anywhere: needs a project's yes) **PRD 03** The kit's mail Worker (`docs/prds/03-mail-worker.md`). Needs 01's contract
       only.
 - [ ] **PRD 04** `desk.mjs mail` and `desk.mjs send <id>` (`docs/prds/04-mail-client.md`).
       Needs 03.
