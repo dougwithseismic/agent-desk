@@ -54,4 +54,13 @@ time. The playbooks also stop desks reading the person's own inbox.
 
 ## Implementation Notes
 
-(Filled in after shipping.)
+- The desk skill has a "Listening" section (open, catch up, `watch` in the background, a
+  wake is the inbox step only, restart, failures, stop). The close and hard rules now name
+  listening as the asked-for background run, and a desk reads only its `Mail:` addresses.
+- `conversations.md` has a "Mailboxes" section: owned addresses, never the person's inbox,
+  handovers, and alias sends BCC the desk. Its inbox example uses `mail:` ids, and "already
+  answered" checks the thread and the desk's sent mail, not the person's mailbox.
+- `new-desk` proposes an address for an email desk, writes the `Mail:` line, offers the
+  kit's Worker, and asks before any Cloudflare change.
+- The outreach worked example now has a `Mail:` line in place of reading Gmail.
+- Open: reading a thread from the Worker in the skill depends on `desk.mjs mail` (PRD 04).

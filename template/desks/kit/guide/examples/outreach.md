@@ -11,7 +11,7 @@ desk. Borrow the shape, not the numbers, facts or voice.
 # Partners for example.com
 Headline: live-programmes
 Target: 150 live brand programmes by March
-Needs: MAIL_API_TOKEN
+Mail: partners@partners.example.com, ops@partners.example.com, doug@partners.example.com
 
 ## Purpose
 Do the brand side so Doug doesn't have to orchestrate it: answer brands and network staff,
@@ -32,7 +32,7 @@ touches a day (sent_today).
 Every email CCs doug@example.com. Replies come from the address the brand wrote to.
 
 ## The round
-1. Inbox: partners@ and ops@, then brand replies in Gmail. Oldest first, 20 a round.
+1. Inbox: partners@, ops@ and doug@ on the desk's subdomain. Oldest first, 20 a round.
 2. Due: agent tasks, then follow-ups from waiting_on_them.
 3. New outreach within limits: pending and declined programmes worth chasing, then PPC asks.
 
@@ -46,8 +46,9 @@ At most 25 first touches a day while the sending domain warms up; bounces under 
 Above that, stop first touches and tell Doug.
 
 ## Sources
-Mail: the project's mail script (read and send). Networks: each network's publisher API.
-Search volume: the search-data skill, Keyword Planner. Rival bids: the PPC watcher export in out/ppc/.
+Mail: the project's mail Worker, through `node desks/desk.mjs mail` and `send`. Networks: each
+network's publisher API. Search volume: the search-data skill, Keyword Planner. Rival bids: the
+PPC watcher export in out/ppc/.
 
 ## Tables
 outreach_brands: one per brand we court, with its programme and stage.

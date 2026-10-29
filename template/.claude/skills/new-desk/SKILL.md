@@ -57,6 +57,7 @@ In plain words, in one message:
 - each kind of action, as kind · channel · identity, and who approves it;
 - its tables: one line each, what a row is and its stages;
 - what it needs set up (env vars, access) and where it's stored;
+- if it talks by email, its own address (see "Mail" below);
 - the first real piece of work it would do.
 
 Ask for the one decision that matters. Adjust, then build. Don't present a
@@ -65,7 +66,8 @@ questionnaire.
 ## 4. Build it
 
 1. `desks/<name>/desk.md`: the one-page plan in the anatomy format. Include the
-   `Headline:`, `Target:` and `Needs:` lines, and their own words for purpose and limits.
+   `Headline:`, `Target:` and `Needs:` lines, a `Mail:` line if it talks by email, and
+   their own words for purpose and limits.
 2. `desks/<name>/schema.sql`: only the desk's own things, named `<name>_<things>`. Each
    gets a key column, a stage with its values listed, `stage_at`, `source`, `last_by`
    and timestamps, plus the stage-change trigger. Add views for the questions the round
@@ -77,6 +79,19 @@ questionnaire.
 5. If they want it hosted, follow `hosting.md`, and ask before creating the Railway
    service.
 6. Make sure `desks/.env` has `DESK_USER`, and `.claude/skills/desk` exists.
+
+### Mail
+
+A desk that talks by email gets its own address, never the person's inbox: a persona or
+role on a subdomain, such as `clara@partners.example.com`, listed in its `Mail:` line. An
+address belongs to one desk. Mail to it goes to the project's mail Worker, which keeps
+it, forwards a copy to the person and sends approved replies. The desk reads from the
+Worker, and "/desk <name> listen" answers mail as it arrives.
+
+If the project has no mail Worker yet, offer the kit's (`desks/kit/mail/README.md`), or
+the one route the desk needs if the project already runs its own. Ask before any
+Cloudflare change: the subdomain's DNS, routing, Email Sending, the database, secrets or
+a deploy. Until it's set up, the desk can still be built; its mail steps wait.
 
 ## 5. Do one real round
 

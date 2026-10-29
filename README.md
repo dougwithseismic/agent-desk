@@ -27,6 +27,15 @@ node bin/kit.mjs ~/path/to/project
 
 Add `--check` to see what would change without changing anything.
 
+### Desks that answer mail
+
+A desk that talks by email has its own addresses (a `Mail:` line in its `desk.md`), on a
+subdomain whose mail goes to the project's mail Worker. Say "/desk partners listen" and
+that session answers mail as it arrives: `node desks/desk.mjs watch partners` waits in the
+background with no model running, and wakes the session when mail lands. One desk is one
+agent at work, and a project can have as many as it needs. Desks never read the person's
+own inbox.
+
 ## What lands in a project
 
 ```text
