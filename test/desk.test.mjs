@@ -65,7 +65,7 @@ async function wipeHosted(dir) {
 async function project(desks = { seo: {} }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
   dirs.push(dir);
-  fs.cpSync(KIT, path.join(dir, 'desks'), { recursive: true });
+  fs.cpSync(KIT, path.join(dir, 'desks'), { recursive: true, filter: (src) => !src.startsWith(path.join(KIT, 'kit', 'mail')) });
   for (const [name, d] of Object.entries(desks)) {
     fs.mkdirSync(path.join(dir, 'desks', name, 'migrations'), { recursive: true });
     const head = [`# ${name} test desk`, `Headline: ${d.headline ?? 'clicks-7d'}`, 'Target: 100 a week'];

@@ -1,0 +1,89 @@
+// The project's mail Worker: the mailbox for its desks. It receives mail at the desks'
+// addresses, stores and threads it in D1, forwards a copy to you, and sends the replies a
+// desk has approved. One per project, shared by all its desks.
+//
+// Copy this file to desks/mail/wrangler.jsonc and change every value marked "yours".
+// The code is the kit's, in desks/kit/mail/, and is replaced when the kit is updated;
+// this file is the project's and never is. Run wrangler from desks/mail/:
+//
+//   npx wrangler deploy                                      (or pnpm exec wrangler ...)
+//   npx wrangler d1 migrations apply <database_name> --remote
+//
+// Nothing here is secret. The one secret, MAIL_API_TOKEN, is set with
+// `wrangler secret put MAIL_API_TOKEN` and never goes in this file (see the end).
+{
+  // Yours: the Worker's name, usually "<project>-mail". With workers_dev on, the API is
+  // at https://<name>.<your-account-subdomain>.workers.dev, which is DESK_MAIL_URL in
+  // desks/.env. Email Routing rules send each address to the Worker by this name.
+  "name": "example-mail",
+
+  // The kit's code and migrations, relative to this file in desks/mail/.
+  "main": "../kit/mail/src/index.js",
+
+  // The Workers runtime version the code is written for. Leave it unless the kit changes it.
+  "compatibility_date": "2026-10-01",
+
+  // Serves the API on workers.dev. Set to false if you give the Worker a custom domain
+  // ("routes") instead; DESK_MAIL_URL is then that domain.
+  "workers_dev": true,
+
+  // Keeps the Worker's logs (receives, sends, failures) in the Cloudflare dashboard.
+  // They carry ids, addresses and error codes, never bodies or tokens.
+  "observability": { "enabled": true },
+
+  // Cloudflare Email Sending, used by POST /v1/send. Each address in SENDERS needs Email
+  // Sending turned on for its domain. `wrangler dev` simulates sends locally and sends
+  // nothing; adding "remote": true would make local dev send real email.
+  "send_email": [{ "name": "EMAIL" }],
+
+  // Where mail is stored: one D1 database per project. Create it with
+  // `npx wrangler d1 create <project>-mail` and paste the id it prints.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "example-mail", // yours
+      "database_id": "00000000-0000-0000-0000-000000000000", // yours
+      "migrations_dir": "../kit/mail/migrations"
+    }
+  ],
+
+  "vars": {
+    // Every address the Worker receives for. Each needs an Email Routing rule that sends
+    // it to this Worker. Mail to any other address that reaches the Worker is refused,
+    // and nothing of it is stored. Mail to name+tag@ counts as name@. Each address
+    // belongs to one desk, named in that desk's `Mail:` line in desks/<desk>/desk.md.
+    "MAILBOXES": ["desk@mail.example.com"], // yours
+
+    // The addresses the Worker may send as, each with the display name recipients see.
+    // Each needs Email Sending on its domain. A send from any other address is refused.
+    // Mail that arrives *from* one of these (a send made elsewhere, such as a Gmail
+    // "Send mail as" alias, that BCC'd the desk) is kept as the desk's own copy and isn't
+    // announced as new mail.
+    "SENDERS": { "desk@mail.example.com": "Desk at Example" }, // yours
+
+    // Verified Email Routing destinations that get a copy of every email the Worker
+    // stores: your own inbox, for reading along. Verify each one in Email Routing first.
+    // Use [] for no copies.
+    "FORWARD_TO": ["you@example.com"], // yours
+
+    // Sending caps, counted across every send through this Worker (the project's desks
+    // share a sending domain), per UTC day and month. A send past one is refused with 429.
+    // A first touch is a new email, not a reply, to addresses that have never written to
+    // any of the mailboxes. Start low while a new sending domain warms up. All three are
+    // required: without them the Worker sends nothing.
+    "FIRST_TOUCH_DAILY_LIMIT": 20,
+    "DAILY_SEND_LIMIT": 60,
+    "MONTHLY_SEND_LIMIT": 500
+  }
+
+  // Secret: MAIL_API_TOKEN, the bearer token for every /v1 route (GET /health is open).
+  // At least 32 characters; without it every /v1 route answers 503. The same value is
+  // DESK_MAIL_TOKEN in desks/.env. To make one and set both without printing it, from
+  // desks/mail/:
+  //
+  //   printf 'DESK_MAIL_TOKEN=%s\n' "$(openssl rand -hex 32)" >> ../.env
+  //   grep '^DESK_MAIL_TOKEN=' ../.env | cut -d= -f2- | npx wrangler secret put MAIL_API_TOKEN
+  //
+  // For `wrangler dev`, put MAIL_API_TOKEN=... in desks/mail/.dev.vars, and keep that
+  // file and desks/mail/.wrangler/ out of git.
+}

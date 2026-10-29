@@ -115,4 +115,35 @@ in this PRD.
 
 ## Implementation Notes
 
-(Filled in after shipping.)
+- Built by a builder agent, then reviewed and merged by the lead. Plain JavaScript in
+  `kit/mail/src/` (index, api, inbound, outbound, store, mail), migration `0001_mail.sql`,
+  `wrangler.example.jsonc`, and postal-mime 4.2.0's own published ES module build vendored
+  (MIT-0; the tarball checksum is in `vendor/README.md`).
+- `test/mail.test.mjs`: 30 tests against a D1 stand-in over node:sqlite with the real
+  migration, a fake `send_email` binding and raw RFC 5322 mail. Each of 17 guards was
+  removed in turn, and its test failed each time. `wrangler deploy --dry-run` bundles it
+  (194 KiB, 51 KiB gzipped). `wrangler dev` ran it with a local D1 and simulated
+  sending: receive, forward, changes, threading, a duplicate delivery ignored, an
+  unknown address refused, a threaded reply, and DUPLICATE on a resend.
+- Differences from the client project's Worker, on purpose:
+  - A storage failure throws and forwards nothing.
+  - A mailbox stores one copy of an email, matched by Message-ID.
+  - An email postal-mime can't read is still stored from its envelope.
+  - `from` is required.
+  - Unknown send fields are refused.
+  - The key lookup runs before the suppression and cap checks.
+  - A partial unique index on `key` (sending or sent) stops a racing retry, and a failed
+    send frees its key.
+  - A missing cap stops sending.
+  - A sender's +tag is kept.
+  - No `"remote": true`, so local dev never sends real mail.
+  - The header is `X-Desk-Mail-Id`.
+- `kit/mail/README.md` (written by the lead): what it does, the setup recipe (checked
+  against wrangler 4.156.0's `email routing` and `email sending` commands), the API and
+  refusals, and the contract for a project's own Worker.
+- Open: mail forged from a desk's own address is filed as the desk's own copy (kept,
+  forwarded, but not announced). The README makes DMARC `p=reject` on the subdomain part
+  of setup, so forged mail is refused before it arrives.
+- Open: `desks/.gitignore` doesn't cover `mail/.dev.vars` or `mail/.wrangler/` yet (PRD 05).
+- The builder's worktree was based on `origin/main`, a squashed history that local `main`
+  doesn't share. Its commit was cherry-picked onto local `main`.
