@@ -8,6 +8,9 @@ of its own. All of them share one SQLite database, through `desk.mjs`.
   desk, and "set up a desk for ..." to make one.
 - `node desks/desk.mjs status` shows what needs attention; `node desks/desk.mjs help`
   lists the commands.
+- A desk with a `Mail:` line answers mail to its own addresses. Say "/desk <name> listen"
+  and the session answers mail as it arrives, through the project's mail Worker
+  (`kit/mail/README.md`).
 - Settings go in `desks/.env`; copy `.env.example`. The local database and private files
   go in `desks/data/`. Neither is committed. A git worktree uses the main checkout's
   `desks/.env` and database, so every worktree works on the same desks.

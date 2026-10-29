@@ -49,6 +49,7 @@ doesn't fit on a page is two desks, or a desk with a playbook.
 Headline: clicks-28d
 Target: <the number they chose, and by when>
 Needs: <environment variables the round uses>
+Mail: <the desk's own email addresses, if it answers mail>
 
 ## Purpose
 What it's for, who it serves, who owns it, and what "working" looks like.
@@ -78,7 +79,10 @@ One line per table in schema.sql: what a row is.
 ```
 
 The header lines matter to the script: `Headline:` names the measure the board shows,
-`Target:` is shown beside it, and `Needs:` lists environment variables `doctor` checks.
+`Target:` is shown beside it, `Needs:` lists environment variables `doctor` checks, and
+`Mail:` lists the addresses the desk answers. An address belongs to one desk, and
+`node desks/desk.mjs watch <desk>` listens to those addresses, through the project's mail
+Worker. Leave `Mail:` out if the desk doesn't answer email.
 
 ## schema.sql: the desk's own tables
 

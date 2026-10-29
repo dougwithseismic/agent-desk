@@ -189,6 +189,17 @@ CREATE TABLE IF NOT EXISTS inbox (
   outcome TEXT                          -- what was done: action #12, task #4, nothing (newsletter)
 );
 
+-- Where each desk's mail listener (desk.mjs watch) got to, so a restart never shows mail
+-- twice and never misses any.
+CREATE TABLE IF NOT EXISTS mail_cursors (
+  desk TEXT PRIMARY KEY REFERENCES desks(name),
+  source TEXT NOT NULL,                 -- the Worker and addresses the cursor belongs to
+  cursor TEXT NOT NULL,                 -- the Worker's position, passed back as it is
+  handed_over TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(handed_over)), -- open inbox ids already announced
+  checked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  by TEXT NOT NULL
+);
+
 -- A change, measured later: where it stood before, when to look again, what happened.
 CREATE TABLE IF NOT EXISTS checks (
   id INTEGER PRIMARY KEY,

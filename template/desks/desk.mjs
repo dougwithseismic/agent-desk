@@ -14,6 +14,8 @@
 //   node desks/desk.mjs restore <file.sql>        load a dump into an empty database
 //   node desks/desk.mjs doctor                    check settings, connection, schema and each desk's needs
 //   node desks/desk.mjs token                     make a key and token for a hosted database
+//   node desks/desk.mjs watch <desk>              wait for mail to the desk's Mail: addresses, print a line
+//                                                 for each and exit (--every 30s, --max 25m)
 //
 // In SQL, :me is you (DESK_USER), :now the time, :today the date and :desk the --desk value.
 // Add your own with -a name=value, or -a name=@path to read a file, so long text needs no
@@ -25,6 +27,8 @@
 //   DESK_DB        file:desks/data/desk.db (the default), or https://<host> for a hosted database
 //   DESK_DB_TOKEN  the token for a hosted database: its secret, or a JWT from the token command
 //   DESK_USER      who you are: doug, sam
+//   DESK_MAIL_URL  the mail Worker that desks with a Mail: line listen to (kit/mail/README.md)
+//   DESK_MAIL_TOKEN  that Worker's MAIL_API_TOKEN
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -79,6 +83,8 @@ const DB = setting('DESK_DB', 'file:desks/data/desk.db');
 const TOKEN = setting('DESK_DB_TOKEN');
 const USER = setting('DESK_USER');
 const HOSTED = /^(https?|libsql):\/\//.test(DB);
+const MAIL_URL = setting('DESK_MAIL_URL')?.replace(/\/+$/, '');
+const MAIL_TOKEN = setting('DESK_MAIL_TOKEN');
 
 class DeskError extends Error {}
 const fail = (msg) => { throw new DeskError(msg); };
@@ -268,6 +274,7 @@ async function openHosted(url, token) {
         throw err;
       }
       if (res.status === 401 || res.status === 403) fail(`the hosted database refused the token (${res.status}): check DESK_DB_TOKEN in desks/.env`);
+      if (res.status >= 500) throw retryable(`the hosted database answered ${res.status}: ${(await res.text()).slice(0, 300)}`);
       if (!res.ok) fail(`the hosted database answered ${res.status}: ${(await res.text()).slice(0, 300)}`);
       const [first] = (await res.json()).results;
       if (first.type === 'error') fail(first.error.message);
@@ -389,6 +396,7 @@ function parseArgs(argv) {
     else if (a === '--full') flags.full = true;
     else if (a === '--desk') flags.desk = argv[++i];
     else if (a === '--where') flags.where = argv[++i];
+    else if (a === '--every' || a === '--max') flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a time, such as 30s or 25m`);
     else if (a === '-a' || a === '--arg') {
       const kv = argv[++i] ?? '';
       const eq = kv.indexOf('=');
@@ -411,7 +419,8 @@ function sha(text) {
 }
 
 // A desk is a folder in desks/ with a desk.md. Its header lines before the first ##
-// can say Headline:, Target: and Needs: (env var names, comma separated).
+// can say Headline:, Target:, Needs: (env var names, comma separated) and Mail: (the
+// addresses the desk answers, comma separated).
 function desksOnDisk() {
   return fs.readdirSync(DESKS, { withFileTypes: true })
     .filter((d) => d.isDirectory() && fs.existsSync(path.join(DESKS, d.name, 'desk.md')))
@@ -427,8 +436,16 @@ function desksOnDisk() {
         headline: field('Headline'),
         target: field('Target'),
         needs: (field('Needs') || '').split(/[,\s]+/).filter((x) => /^[A-Z][A-Z0-9_]*$/.test(x)),
+        mail: [...new Set((field('Mail') || '').toLowerCase().split(/[,\s]+/).filter((x) => /^[^@<>]+@[^@<>]+\.[^@<>]+$/.test(x)))],
       };
     });
+}
+
+// Addresses in more than one desk's Mail: line, with the desks that claim them.
+function mailClashes(desks) {
+  const owners = new Map();
+  for (const d of desks) for (const a of d.mail) owners.set(a, [...(owners.get(a) || []), d.name]);
+  return [...owners].filter(([, names]) => names.length > 1);
 }
 
 // --desk, or the only desk there is.
@@ -599,6 +616,177 @@ async function take(flags, key, doing) {
   return 0;
 }
 
+// ---------- mail: the desk's listener ----------
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const retryable = (msg) => Object.assign(new DeskError(msg), { retry: true });
+const ago = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)}s`);
+
+// Text from outside (an id, an address), made safe to print as one word on one line.
+const oneWord = (s) => String(s ?? '').replace(/[\s\p{C}]/gu, '').slice(0, 200);
+const address = (s) => oneWord(String(s ?? '').match(/<([^<>\s]+@[^<>\s]+)>/)?.[1] ?? s);
+
+function duration(text, fallback, flag) {
+  if (text === undefined) return fallback;
+  const m = String(text).match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/);
+  const ms = m && Number(m[1]) * { ms: 1, s: 1000, m: 60000, h: 3600000 }[m[2] || 's'];
+  if (!ms) fail(`${flag} takes a time such as 30s, 5m or 1h, not "${text}"`);
+  return ms;
+}
+
+// GET from the project's mail Worker (kit/mail/README.md). A refused token or a request
+// it can't serve stops at once; no answer, a 5xx or a 429 may pass, so it's retryable.
+async function mailGet(route, query) {
+  const url = new URL(MAIL_URL + route);
+  for (const [k, v] of query) url.searchParams.append(k, v);
+  const where = url.host;
+  let res, text;
+  try {
+    res = await fetch(url, { headers: { authorization: `Bearer ${MAIL_TOKEN}` }, signal: AbortSignal.timeout(20000) });
+    text = await res.text();
+  } catch (e) {
+    throw retryable(`could not reach the mail Worker at ${where} (${e.cause?.code || e.name})`);
+  }
+  if (res.status === 401 || res.status === 403) {
+    fail(`the mail Worker at ${where} refused DESK_MAIL_TOKEN (${res.status}): set it to the Worker's MAIL_API_TOKEN in desks/.env`);
+  }
+  if (res.status >= 500 || res.status === 408 || res.status === 429) throw retryable(`the mail Worker at ${where} answered ${res.status}`);
+  if (!res.ok) {
+    let said = text;
+    try { const j = JSON.parse(text); said = j.error?.message ?? j.error ?? j.message ?? text; } catch {}
+    fail(`the mail Worker at ${where} answered ${res.status} to ${route} (${String(said).replace(/\s+/g, ' ').slice(0, 200)}): check DESK_MAIL_URL is the desk mail Worker (kit/mail/README.md) and the desk's Mail: line`);
+  }
+  try { return JSON.parse(text); } catch { throw retryable(`the mail Worker at ${where} answered something that isn't JSON`); }
+}
+
+// Waits, with no model calls, for mail to the desk's own addresses and for mail another
+// desk handed over. Prints a line for each on stdout and exits 0, which wakes the session
+// that started it; after --max with nothing, it says so and exits 0. Everything else goes
+// to stderr. One person listens to a desk: the lock listen:<desk>.
+async function watch(flags, deskName) {
+  const name = deskName ?? deskOf(flags);
+  const desks = desksOnDisk();
+  const desk = desks.find((d) => d.name === name);
+  if (!desk) fail(name ? `no desk called ${name}: a desk is a folder in desks/ with a desk.md` : 'usage: desk.mjs watch <desk>');
+  if (!desk.mail.length) fail(`desks/${desk.name}/desk.md has no Mail: line: add "Mail: <address>" under its title, with the addresses this desk answers`);
+  const clashes = mailClashes(desks).filter(([a]) => desk.mail.includes(a));
+  if (clashes.length) {
+    fail(`${clashes.map(([a, names]) => `${a} is in the Mail: line of ${names.join(' and ')}`).join('; ')}: an address belongs to one desk, so take it out of the others`);
+  }
+  const missing = [['DESK_MAIL_URL', MAIL_URL, "<the mail Worker's address>"], ['DESK_MAIL_TOKEN', MAIL_TOKEN, "<the Worker's MAIL_API_TOKEN>"]]
+    .filter(([, v]) => !v).map(([n, , what]) => `${n}=${what}`);
+  if (missing.length) fail(`set ${missing.join(' and ')} in desks/.env (kit/mail/README.md)`);
+  if (!/^https?:\/\/[^/]/.test(MAIL_URL)) fail(`DESK_MAIL_URL should start with https:// (it's the mail Worker's address), not "${MAIL_URL}"`);
+  if (!USER) fail('set DESK_USER in desks/.env first, so the lock says who is listening');
+  const every = duration(flags.every, 30000, '--every');
+  const max = duration(flags.max, 25 * 60000, '--max');
+  const own = new Set(desk.mail);
+  const mailboxes = desk.mail.map((a) => ['mailbox', a]);
+  const key = `listen:${desk.name}`;
+  const { host, pathname } = new URL(MAIL_URL);
+  const source = `${host}${pathname.replace(/\/$/, '')} ${[...own].sort().join(',')}`;
+
+  const q = async (text, values = {}) => {
+    const db = await open();
+    try { return (await execute(db, text, autoParams({ desk: desk.name, key, source, ...values }))).results; } finally { db.close(); }
+  };
+  let fails = 0;
+  const attempt = async (step) => {
+    for (;;) {
+      try { const out = await step(); fails = 0; return out; } catch (e) {
+        if (!e.retry && !('unreached' in e)) throw e;
+        if (++fails >= 3) fail(`${e.message}, ${fails} times in a row: stopped listening`);
+        console.error(`${e.message}: trying again in ${ago(every)} (${fails} of 3)`);
+        await sleep(every);
+      }
+    }
+  };
+
+  const [ready] = await q(`SELECT (SELECT count(*) FROM sqlite_schema WHERE name = 'mail_cursors'),
+    (SELECT count(*) FROM desks WHERE name = :desk)`);
+  if (!ready.rows[0][0]) fail('the database is older than the kit: run node desks/desk.mjs init');
+  if (!ready.rows[0][1]) fail(`${desk.name} is not in the database yet: run node desks/desk.mjs init`);
+  const [, held, saved] = await q(`
+    INSERT INTO locks(key, by, desk, doing) VALUES (:key, :me, :desk, 'listening for mail')
+      ON CONFLICT(key) DO UPDATE SET doing = excluded.doing, desk = excluded.desk,
+        at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE locks.by = excluded.by;
+    SELECT by, at FROM locks WHERE key = :key;
+    SELECT cursor, source, handed_over, checked_at FROM mail_cursors WHERE desk = :desk;`);
+  const [holder, since] = held.rows[0];
+  if (holder !== USER) {
+    const checked = saved.rows[0]?.[3];
+    console.error(`${holder} is listening to ${desk.name} (since ${since}${checked ? `, last checked ${checked}` : ''}). Leave it, or take it over with: node desks/desk.mjs take ${key} "listening for mail"`);
+    return 2;
+  }
+
+  // Handovers: open email inbox rows for this desk that came to an address it doesn't own.
+  // handed_over keeps the ones already announced that are still open.
+  const handovers = `SELECT id, mailbox, from_addr FROM inbox WHERE desk = :desk AND channel = 'email'
+    AND handled_at IS NULL AND lower(mailbox) NOT IN (SELECT value FROM json_each(:own)) ORDER BY received_at, id`;
+  const ownJson = JSON.stringify([...own]);
+  let [after, was, announced] = saved.rows[0] ?? [];
+  if (was !== source) {
+    console.error(was ? `${desk.name}'s addresses or mail Worker changed: listening from now.` : `First time listening for ${desk.name}: from now on.`);
+    const page = await attempt(() => mailGet('/v1/changes', [...mailboxes, ['after', 'latest']]));
+    if (page?.cursor == null) fail(`the mail Worker at ${host} gave no cursor for after=latest: is it the desk mail Worker? (kit/mail/README.md)`);
+    const [, row] = await attempt(() => q(`
+      INSERT INTO mail_cursors(desk, source, cursor, handed_over, by)
+        VALUES (:desk, :source, :cursor, (SELECT json_group_array(id) FROM (${handovers})), :me)
+        ON CONFLICT(desk) DO UPDATE SET source = excluded.source, cursor = excluded.cursor,
+          checked_at = excluded.checked_at, by = excluded.by;
+      SELECT cursor, handed_over FROM mail_cursors WHERE desk = :desk;`, { cursor: String(page.cursor), own: ownJson }));
+    [after, announced] = row.rows[0];
+  }
+
+  // One look: new mail from the Worker (a full page may mean more), then handovers. The
+  // cursor and the handovers announced are saved together before anything is printed.
+  const poll = async () => {
+    let next = after;
+    const mail = [];
+    for (let pages = 0; pages < 100; pages++) {
+      const page = await mailGet('/v1/changes', [...mailboxes, ['after', next], ['limit', '50']]);
+      if (page?.cursor == null || !Array.isArray(page.messages)) throw retryable(`the mail Worker at ${host} answered without a cursor and messages`);
+      mail.push(...page.messages.filter((m) => own.has(String(m?.mailbox).toLowerCase())));
+      const moved = String(page.cursor) !== next;
+      next = String(page.cursor);
+      if (page.messages.length < 50 || !moved) break;
+    }
+    const [open] = await q(`${handovers};
+      UPDATE mail_cursors SET cursor = :next, checked_at = :now, by = :me,
+        handed_over = (SELECT json_group_array(id) FROM (${handovers})) WHERE desk = :desk;`, { next, own: ownJson });
+    const seen = new Set(JSON.parse(announced));
+    after = next;
+    announced = JSON.stringify(open.rows.map((r) => r[0]));
+    return { mail, handed: open.rows.filter((r) => !seen.has(r[0])) };
+  };
+
+  const line = flags.json
+    ? (o) => JSON.stringify(o)
+    : (o) => `${o.event} ${o.id} from ${o.from} to ${o.mailbox}${o.auto ? ', automatic' : ''}`;
+  console.error(`Listening for mail to ${[...own].join(', ')} (${desk.name}): every ${ago(every)}, for up to ${ago(max)}.`);
+  const deadline = Date.now() + max;
+  for (;;) {
+    const { mail, handed } = await attempt(poll);
+    const events = [
+      ...mail.map((m) => {
+        const mailbox = String(m.mailbox).toLowerCase();
+        return { event: 'mail', desk: desk.name, id: `mail:${mailbox}:${oneWord(m.id) || 'unknown'}`, mailbox,
+          from: address(m.from) || 'unknown', auto: m.auto === true || m.auto === 1 };
+      }),
+      ...handed.map(([id, mailbox, from]) => ({ event: 'handover', desk: desk.name, id: oneWord(id), mailbox: oneWord(mailbox), from: address(from) || 'unknown' })),
+    ];
+    if (events.length) {
+      for (const e of events) console.log(line(e));
+      return 0;
+    }
+    if (Date.now() + every > deadline) {
+      console.log(flags.json ? JSON.stringify({ event: 'quiet', desk: desk.name, waited: ago(max) }) : `no new mail for ${desk.name} in ${ago(max)}`);
+      return 0;
+    }
+    await sleep(every);
+  }
+}
+
 function csv(cols, rows) {
   const q = (v) => {
     const s = cell(v);
@@ -730,6 +918,23 @@ async function doctor() {
     db.close();
   }
 
+  const desks = desksOnDisk();
+  for (const [a, names] of mailClashes(desks)) bad(`${a} is in the Mail: line of ${names.join(' and ')}: an address belongs to one desk, so take it out of the others`);
+  const listening = desks.filter((d) => d.mail.length);
+  if (listening.length) {
+    const missing = ['DESK_MAIL_URL', 'DESK_MAIL_TOKEN'].filter((n) => !setting(n));
+    if (missing.length) bad(`${listening.map((d) => d.name).join(', ')} answer${listening.length === 1 ? 's' : ''} mail, so set ${missing.join(' and ')} in desks/.env (kit/mail/README.md)`);
+    else {
+      try {
+        const t0 = Date.now();
+        await mailGet('/v1/changes', [...new Set(listening.flatMap((d) => d.mail))].map((a) => ['mailbox', a]).concat([['after', 'latest']]));
+        ok(`mail Worker at ${new URL(MAIL_URL).host} answers in ${Date.now() - t0} ms`);
+      } catch (e) {
+        bad(e.message);
+      }
+    }
+  }
+
   if (!HOSTED) {
     const file = localPath(DB);
     if (fs.existsSync(file)) {
@@ -826,6 +1031,7 @@ async function main() {
     case 'restore': return restore(flags, args[0]);
     case 'doctor': return doctor();
     case 'token': return token(flags);
+    case 'watch': return watch(flags, args[0]);
     case undefined: case 'help': case '--help': case '-h':
       console.log(help());
       return 0;

@@ -94,4 +94,21 @@ Every `/v1` route takes `Authorization: Bearer <DESK_MAIL_TOKEN>`.
 
 ## Implementation Notes
 
-(Filled in after shipping.)
+- Built as specified, with one change: handovers are tracked as `mail_cursors.handed_over`,
+  a JSON list of the open inbox ids already announced, not as an inbox rowid. The inbox has
+  a text primary key, so its rowids change when a database is dumped and restored (or
+  vacuumed), and a rowid mark would then miss handovers.
+- `mail_cursors.source` holds the Worker's host and path plus the desk's addresses. When
+  either changes, `watch` starts from now again, because the old cursor doesn't apply.
+- The listener opens the database for each look and doesn't keep it open. Each look writes
+  `checked_at`, so a stale `listen:` lock shows when its listener last checked.
+- Retried (3 in a row stop it): no answer, a 5xx or a 429 from the Worker, and a hosted
+  database that can't be reached or answers 5xx. Stopped at once: a 401 or 403 (token), any
+  other 4xx, a `DESK_MAIL_URL` that isn't http(s), and `--every 0`.
+- Sender addresses and ids are reduced to one word before printing, so text in an email
+  can't add lines to the output. The subject and body are never printed.
+- Open: two sessions run by the same person can both listen to one desk, because the lock
+  is per person. The listening section (PRD 02) says to listen from one session.
+- Tests: 8 in `test/desk.test.mjs` against a fake Worker served from the test. Each guard
+  was checked to fail without it (the lock, clashes, handed_over, pagination, starting
+  from now).
