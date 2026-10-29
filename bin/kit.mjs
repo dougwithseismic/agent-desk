@@ -7,12 +7,14 @@
 //
 // The kit owns desks/desk.mjs, desks/kit/, desks/README.md, desks/.env.example and the
 // desk and new-desk skills, and replaces them on update. It never touches a desk's own
-// folder (desks/<name>/), desks/.env or desks/data/.
+// folder (desks/<name>/), desks/mail/ (the project's mail Worker settings), desks/.env,
+// desks/data/, or what wrangler and npm leave in the kit's folders.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { ensureGitignore } from '../template/desks/desk.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TEMPLATE = path.join(REPO, 'template');
@@ -37,9 +39,12 @@ if (PROJECT === REPO) {
   process.exit(1);
 }
 
+// Never the kit's, wherever they are: what wrangler and npm leave in a kit folder.
+const LOCAL = new Set(['node_modules', '.wrangler', '.dev.vars']);
+
 function files(root, rel) {
   const full = path.join(root, rel);
-  if (!fs.existsSync(full)) return [];
+  if (LOCAL.has(path.basename(rel)) || !fs.existsSync(full)) return [];
   if (!fs.statSync(full).isDirectory()) return [rel];
   return fs.readdirSync(full).flatMap((f) => files(root, path.join(rel, f)));
 }
@@ -81,7 +86,7 @@ if (!added.length && !changed.length && !removed.length && !links.length) {
 if (check) process.exit(1);
 
 // Local edits to kit files would be lost: stop unless told to go ahead.
-const edited = git(PROJECT, 'status', '--porcelain', '--', ...OWNED.filter((p) => fs.existsSync(path.join(PROJECT, p))));
+const edited = git(PROJECT, 'status', '--porcelain', '--', ...OWNED);
 if (edited && !force) {
   console.error(`\nThese kit files have uncommitted edits in the project, and updating would replace them:\n${edited}`);
   console.error('Commit or move the edits (desk-specific changes belong in desks/<name>/), or run again with --force.');
@@ -100,10 +105,7 @@ for (const [link, to] of links) {
 }
 fs.writeFileSync(versionFile, `${version}\n`);
 
-const ignore = path.join(PROJECT, 'desks/.gitignore');
-const lines = fs.existsSync(ignore) ? fs.readFileSync(ignore, 'utf8').split(/\r?\n/) : [];
-const missing = ['data', '.env'].filter((l) => !lines.includes(l));
-if (missing.length) fs.appendFileSync(ignore, `${lines.length && lines.at(-1) !== '' ? '\n' : ''}${missing.join('\n')}\n`);
+ensureGitignore(path.join(PROJECT, 'desks'));
 
 const coreChanged = changed.includes('desks/kit/core.sql');
 console.log(`\nDone: ${added.length} new, ${changed.length} changed, ${removed.length} removed.`);

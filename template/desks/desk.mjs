@@ -474,9 +474,11 @@ function migrationFiles(dir) {
   return fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
 }
 
-function ensureGitignore() {
-  const file = path.join(DESKS, '.gitignore');
-  const want = ['data', '.env'];
+// Keeps the database, the settings, and what wrangler and npm leave (the mail Worker's
+// .dev.vars holds its token) out of git. bin/kit.mjs calls it too.
+export function ensureGitignore(desks = DESKS) {
+  const file = path.join(desks, '.gitignore');
+  const want = ['data', '.env', 'node_modules', '.wrangler', '.dev.vars'];
   const have = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split(/\r?\n/) : [];
   const missing = want.filter((w) => !have.includes(w));
   if (missing.length) fs.appendFileSync(file, `${have.length && have.at(-1) !== '' ? '\n' : ''}${missing.join('\n')}\n`);
@@ -1222,7 +1224,12 @@ async function doctor() {
     }
   }
   try {
-    const checks = [[MAIN, 'desks/data/x'], [MAIN, 'desks/.env'], ...(MAIN === ROOT ? [] : [[ROOT, 'desks/data']])];
+    const checks = [
+      [MAIN, 'desks/data/x'],
+      [MAIN, 'desks/.env'],
+      [MAIN, 'desks/mail/.dev.vars'],
+      ...(MAIN === ROOT ? [] : [[ROOT, 'desks/data']]),
+    ];
     for (const [dir, p] of checks) {
       try { execFileSync('git', ['-C', dir, 'check-ignore', '-q', p], { stdio: 'ignore' }); } catch (e) {
         if (e.status !== 1) throw e;

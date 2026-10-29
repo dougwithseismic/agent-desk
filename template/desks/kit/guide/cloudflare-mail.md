@@ -105,7 +105,9 @@ pnpm exec wrangler email routing --help
 
 Use only subcommands shown by the installed help. If the project has no local
 Wrangler, use the Cloudflare dashboard or the official API reference rather
-than adding a dependency during discovery. For a supported configuration that
+than adding a dependency during discovery. Running the kit's mail Worker is
+different: it needs a Wrangler at least as new as its `compatibility_date`, so
+its README uses `npx wrangler@latest`. For a supported configuration that
 manages routing addresses, `pnpm exec wrangler deploy --dry-run` can show the
 planned reconciliation; inspect it carefully because an empty managed address
 list can remove rules owned by that configuration.

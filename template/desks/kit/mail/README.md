@@ -23,7 +23,9 @@ address belongs to one desk. Desks read only these addresses, never your own inb
 
 Ask the person before each Cloudflare change: DNS, routing rules, Email Sending, the
 database, the secret and the deploy. `kit/guide/cloudflare-mail.md` covers the Cloudflare
-side in depth: what to look at first, the records, and how to check each layer.
+side in depth: what to look at first, the records, and how to check each layer. Every
+command uses `npx wrangler@latest`: an older wrangler, such as one the project pins, can't
+run the Worker's `compatibility_date`.
 
 1. **Pick the addresses.** A subdomain just for desk mail, such as `partners.example.com`,
    so its MX can point at Cloudflare without touching the domain's own mail. One persona
@@ -36,35 +38,36 @@ side in depth: what to look at first, the records, and how to check each layer.
 3. **The database.** From `desks/mail/`:
 
    ```sh
-   npx wrangler d1 create <project>-mail          # paste the database_id it prints
-   npx wrangler d1 migrations apply <project>-mail --remote
+   npx wrangler@latest d1 create <project>-mail          # paste the database_id it prints
+   npx wrangler@latest d1 migrations apply <project>-mail --remote
    ```
 
 4. **The token**, made and set without printing it, from `desks/mail/`:
 
    ```sh
    printf 'DESK_MAIL_TOKEN=%s\n' "$(openssl rand -hex 32)" >> ../.env
-   grep '^DESK_MAIL_TOKEN=' ../.env | cut -d= -f2- | npx wrangler secret put MAIL_API_TOKEN
+   grep '^DESK_MAIL_TOKEN=' ../.env | cut -d= -f2- | npx wrangler@latest secret put MAIL_API_TOKEN
    ```
 
-5. **Deploy**: `npx wrangler deploy`. A new version takes up to a minute to reach every
-   location. Put the Worker's address in `desks/.env` as
+5. **Deploy**: `npx wrangler@latest deploy`. A new version takes up to a minute to reach
+   every location. Put the Worker's address in `desks/.env` as
    `DESK_MAIL_URL=https://<name>.<account-subdomain>.workers.dev`.
-6. **Receiving.** Turn Email Routing on for the domain (`npx wrangler email routing enable
-   example.com`) and add the subdomain's routing records (`npx wrangler email routing dns`,
-   or the dashboard). Then add one rule per address that sends it to the Worker:
+6. **Receiving.** Turn Email Routing on for the domain (`npx wrangler@latest email routing
+   enable example.com`) and add the subdomain's routing records (`npx wrangler@latest
+   email routing dns`, or the dashboard). Then add one rule per address that sends it to
+   the Worker:
 
    ```sh
-   npx wrangler email routing rules create example.com --match-type literal --match-field to \
+   npx wrangler@latest email routing rules create example.com --match-type literal --match-field to \
      --match-value clara@partners.example.com --action-type worker --action-value <name>
    ```
 
    A new address needs both a rule and a `MAILBOXES` entry.
-7. **Sending.** `npx wrangler email sending enable partners.example.com`, then add the DKIM
-   and return-path records it gives (at `cf-bounce._domainkey.<sub>` and `cf-bounce.<sub>`)
-   and a DMARC record with `p=reject` at `_dmarc.<sub>`. DMARC matters twice: it protects
-   the desks' good name, and it stops a stranger forging mail from a desk's own address,
-   which the Worker would otherwise file as the desk's own copy.
+7. **Sending.** `npx wrangler@latest email sending enable partners.example.com`, then add
+   the DKIM and return-path records it gives (at `cf-bounce._domainkey.<sub>` and
+   `cf-bounce.<sub>`) and a DMARC record with `p=reject` at `_dmarc.<sub>`. DMARC matters
+   twice: it protects the desks' good name, and it stops a stranger forging mail from a
+   desk's own address, which the Worker would otherwise file as the desk's own copy.
 8. **Check.** `node desks/desk.mjs doctor` says whether the Worker answers. Send an email to
    a desk address from another account, then run `node desks/desk.mjs watch <desk>`: it
    prints the email's line within half a minute.
@@ -78,10 +81,25 @@ as" alias for the desk's address. Put the desk's address in BCC: the Worker keep
 as the desk's own (not new mail), so the thread and the reply stay the desk's. The alias's
 From must be one of `SENDERS`.
 
-**Running it locally.** `npx wrangler dev` from `desks/mail/` runs it on this machine with
-a local database, and simulates sends without sending anything. Put
-`MAIL_API_TOKEN=<32+ characters>` in `desks/mail/.dev.vars`. Keep `.dev.vars` and
-`.wrangler/` out of git.
+**Running it locally.** The Worker runs on this machine with a local database, and it
+simulates sends without sending anything. From `desks/mail/`, with
+`MAIL_API_TOKEN=<32+ characters>` in `.dev.vars`:
+
+```sh
+npx wrangler@latest d1 migrations apply <project>-mail --local
+npx wrangler@latest dev
+```
+
+Point `DESK_MAIL_URL` at `http://localhost:8787` and `DESK_MAIL_TOKEN` at the same token.
+To deliver an email to a desk, post a raw message (headers, a blank line, then the text):
+
+```sh
+curl -X POST --data-binary @mail.eml \
+  'http://localhost:8787/cdn-cgi/handler/email?from=someone@example.org&to=clara@partners.example.com'
+```
+
+`desks/.gitignore` keeps `.dev.vars` and `.wrangler/` out of git (the kit and `init` add
+the lines, and `doctor` checks them).
 
 ## The API
 

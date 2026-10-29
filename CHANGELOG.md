@@ -4,6 +4,18 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-10-29
 
+### Setting up desk mail is safer, and you can try it all on your machine (PRD 05) · Improved
+- The mail Worker's local token and state stay out of git: the kit and `init` add them to
+  `desks/.gitignore`, and `doctor` warns if the token file isn't ignored.
+- Updating the kit never copies or deletes what wrangler and npm leave in its folders, and
+  installing it no longer stops over unrelated uncommitted work in your project.
+- The setup uses `npx wrangler@latest`, because an older wrangler can't run the Worker,
+  and shows how to run it locally and deliver a test email to a desk.
+- The kit's own `pnpm e2e` runs the whole loop against the real Worker on this machine:
+  an email arrives, the desk wakes, the approved reply goes once, and a reply that's out of
+  date is refused.
+- Try it: "Running it locally" in `desks/kit/mail/README.md`.
+
 ### Desks read their mail and send approved replies with one command (PRD 04) · New
 - `node desks/desk.mjs mail inbox --desk <name>` shows a desk the mail to its own
   addresses; `read`, `thread`, `search` and `sent` open the rest. Nothing in an email can

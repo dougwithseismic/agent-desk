@@ -5,7 +5,8 @@
   "type": "module",
   "description": "A kit for putting agent desks into a project",
   "scripts": {
-    "test": "node --test test/desk.test.mjs test/mail.test.mjs"
+    "test": "node --test test/desk.test.mjs test/mail.test.mjs test/kit.test.mjs",
+    "e2e": "node test/e2e-mail.mjs"
   },
   "engines": {
     "node": ">=22.16"

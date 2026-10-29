@@ -161,7 +161,7 @@ test('init is safe to repeat and sets up the core and each desk', async () => {
   assert.equal(desk.target, '100 a week');
   if (!HOSTED) {
     assert.equal(fs.statSync(path.join(p.dir, 'desks/data/desk.db')).mode & 0o777, 0o600);
-    assert.match(fs.readFileSync(path.join(p.dir, 'desks/.gitignore'), 'utf8'), /^data$/m);
+    assert.deepEqual(fs.readFileSync(path.join(p.dir, 'desks/.gitignore'), 'utf8').split('\n'), ['data', '.env', 'node_modules', '.wrangler', '.dev.vars', '']);
   }
 });
 
@@ -212,6 +212,19 @@ test('doctor says what to fix', async () => {
   assert.match(good.out, /All good/);
   fs.appendFileSync(path.join(p.dir, 'desks/kit/core.sql'), '\n-- changed\n');
   assert.match((await p.run(['doctor'], { env: { DESK_TEST_NEEDED_THING: 'x' } })).out, /kit changed since the last init/);
+});
+
+test('doctor checks that git keeps out the mail Worker\'s token, and init puts that right', async () => {
+  const p = await project();
+  execFileSync('git', ['init', '-q'], { cwd: p.dir });
+  const ignore = path.join(p.dir, 'desks/.gitignore');
+  fs.writeFileSync(ignore, fs.readFileSync(ignore, 'utf8').replace(/^\.dev\.vars\n/m, ''));
+  const bad = await p.run(['doctor']);
+  assert.equal(bad.code, 1);
+  assert.match(bad.out, /desks\/mail\/\.dev\.vars is not ignored by git: run init/);
+  assert.equal((await p.run(['init'])).code, 0);
+  const good = await p.run(['doctor']);
+  assert.equal(good.code, 0, good.out);
 });
 
 test('a git worktree works on the main checkout\'s database and settings', { skip: HOSTED && 'a local file only' }, async () => {

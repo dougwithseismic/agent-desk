@@ -91,7 +91,9 @@ Worker, and "/desk <name> listen" answers mail as it arrives.
 If the project has no mail Worker yet, offer the kit's (`desks/kit/mail/README.md`), or
 the one route the desk needs if the project already runs its own. Ask before any
 Cloudflare change: the subdomain's DNS, routing, Email Sending, the database, secrets or
-a deploy. Until it's set up, the desk can still be built; its mail steps wait.
+a deploy. Until it's set up, the desk can still be built; its mail steps wait. To try the
+desk's mail first with nothing on Cloudflare, run the Worker on this machine (the README's
+"Running it locally").
 
 ## 5. Do one real round
 

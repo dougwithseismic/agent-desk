@@ -6,8 +6,8 @@
 // The code is the kit's, in desks/kit/mail/, and is replaced when the kit is updated;
 // this file is the project's and never is. Run wrangler from desks/mail/:
 //
-//   npx wrangler deploy                                      (or pnpm exec wrangler ...)
-//   npx wrangler d1 migrations apply <database_name> --remote
+//   npx wrangler@latest deploy
+//   npx wrangler@latest d1 migrations apply <database_name> --remote
 //
 // Nothing here is secret. The one secret, MAIL_API_TOKEN, is set with
 // `wrangler secret put MAIL_API_TOKEN` and never goes in this file (see the end).
@@ -37,7 +37,7 @@
   "send_email": [{ "name": "EMAIL" }],
 
   // Where mail is stored: one D1 database per project. Create it with
-  // `npx wrangler d1 create <project>-mail` and paste the id it prints.
+  // `npx wrangler@latest d1 create <project>-mail` and paste the id it prints.
   "d1_databases": [
     {
       "binding": "DB",
@@ -82,8 +82,8 @@
   // desks/mail/:
   //
   //   printf 'DESK_MAIL_TOKEN=%s\n' "$(openssl rand -hex 32)" >> ../.env
-  //   grep '^DESK_MAIL_TOKEN=' ../.env | cut -d= -f2- | npx wrangler secret put MAIL_API_TOKEN
+  //   grep '^DESK_MAIL_TOKEN=' ../.env | cut -d= -f2- | npx wrangler@latest secret put MAIL_API_TOKEN
   //
-  // For `wrangler dev`, put MAIL_API_TOKEN=... in desks/mail/.dev.vars, and keep that
-  // file and desks/mail/.wrangler/ out of git.
+  // For `wrangler dev`, put MAIL_API_TOKEN=... in desks/mail/.dev.vars. desks/.gitignore
+  // keeps that file and desks/mail/.wrangler/ out of git.
 }

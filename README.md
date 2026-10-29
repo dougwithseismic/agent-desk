@@ -115,4 +115,14 @@ empty database kept for tests, because each test wipes it:
 DESK_TEST_URL=https://... DESK_TEST_TOKEN=... pnpm test
 ```
 
+The tests use a fake mail Worker. To check desk mail end to end against the real Worker,
+running on this machine under `wrangler dev`, use:
+
+```bash
+pnpm e2e
+```
+
+It takes a throwaway project from install to a sent reply (`test/e2e-mail.mjs` lists the
+checks). No email leaves the machine and no Cloudflare account is used.
+
 Needs Node 22.16 or newer, for `node:sqlite`.
