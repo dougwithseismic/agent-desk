@@ -794,6 +794,21 @@ test('watch and doctor say what to add for mail', async () => {
   assert.match(good.out, /ok {4}mail Worker at 127\.0\.0\.1:\d+ answers/);
 });
 
+test('DESK_MAIL_PREFIX is the word mail ids start with, for a desk that already files mail its own way', async () => {
+  const w = await fakeWorker();
+  const p = await project({ seo: { mail: 'a@seo.test' } });
+  const env = { ...w.env, DESK_MAIL_PREFIX: 'acme-mail' };
+  assert.equal((await p.run(['watch', 'seo', ...quick], { env })).code, 0);
+  const id = w.add('a@seo.test');
+  const r = await p.run(['watch', 'seo', ...quick], { env });
+  assert.equal(r.out, `mail acme-mail:a@seo.test:${id} from jo@acme.com to a@seo.test\n`, r.err);
+  const read = await p.run(['mail', 'read', `acme-mail:a@seo.test:${id}`], { env });
+  assert.match(read.out, new RegExp(`^id {7}acme-mail:a@seo.test:${id}\\n`), read.err);
+  const bad = await p.run(['watch', 'seo', ...quick], { env: { ...env, DESK_MAIL_PREFIX: 'Acme mail:' } });
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /DESK_MAIL_PREFIX is the one word inbox ids for mail start with, such as mail or acme-mail, not "Acme mail:"/);
+});
+
 test('a refused token or a bad request stops watch at once, without showing the token', async () => {
   const w = await fakeWorker();
   const p = await project({ seo: { mail: 'a@seo.test' } });

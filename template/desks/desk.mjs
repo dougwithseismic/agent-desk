@@ -35,6 +35,8 @@
 //   DESK_USER      who you are: doug, sam
 //   DESK_MAIL_URL  the mail Worker that desks with a Mail: line listen to (kit/mail/README.md)
 //   DESK_MAIL_TOKEN  that Worker's MAIL_API_TOKEN
+//   DESK_MAIL_PREFIX  the word inbox ids for mail start with: mail (the default), or the one
+//                     a project's own Worker already uses (acme-mail:<mailbox>:<id>)
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -91,6 +93,7 @@ const USER = setting('DESK_USER');
 const HOSTED = /^(https?|libsql):\/\//.test(DB);
 const MAIL_URL = setting('DESK_MAIL_URL')?.replace(/\/+$/, '');
 const MAIL_TOKEN = setting('DESK_MAIL_TOKEN');
+const MAIL_PREFIX = setting('DESK_MAIL_PREFIX', 'mail');
 
 class DeskError extends Error {}
 const fail = (msg) => { throw new DeskError(msg); };
@@ -656,6 +659,7 @@ function mailSettings() {
     .filter(([, v]) => !v).map(([n, , what]) => `${n}=${what}`);
   if (missing.length) fail(`set ${missing.join(' and ')} in desks/.env (kit/mail/README.md)`);
   if (!/^https?:\/\/[^/]/.test(MAIL_URL)) fail(`DESK_MAIL_URL should start with https:// (it's the mail Worker's address), not "${MAIL_URL}"`);
+  if (!/^[a-z][a-z0-9-]*$/.test(MAIL_PREFIX)) fail(`DESK_MAIL_PREFIX is the one word inbox ids for mail start with, such as mail or acme-mail, not "${line1(MAIL_PREFIX)}"`);
 }
 
 // One request to the project's mail Worker (kit/mail/README.md): its HTTP status and its
@@ -840,9 +844,9 @@ async function watch(flags, deskName) {
 // ---------- mail: reading and sending through the Worker ----------
 
 // The inbox's id for an email, mail:<mailbox>:<id>, and the Worker's own id: both work.
-// A thread id may carry the mail: prefix too (mail:5d1e).
-const mailId = (id) => String(id ?? '').replace(/^mail:(?:[^:]*:)?/, '');
-const inboxId = (m) => `mail:${oneWord(m.mailbox).toLowerCase()}:${oneWord(m.id) || 'unknown'}`;
+// A thread id may carry the mail: prefix too (mail:5d1e). DESK_MAIL_PREFIX changes the word.
+const mailId = (id) => String(id ?? '').replace(new RegExp(`^${MAIL_PREFIX}:(?:[^:]*:)?`), '');
+const inboxId = (m) => `${MAIL_PREFIX}:${oneWord(m.mailbox).toLowerCase()}:${oneWord(m.id) || 'unknown'}`;
 // An email's text with its lines kept and anything that could drive a terminal taken out.
 const mailText = (s) => String(s ?? '').replace(/\r\n?/g, '\n').replace(/[^\P{C}\n\t]/gu, '');
 const when = (iso) => String(iso ?? '').replace('T', ' ').slice(0, 16);
@@ -965,7 +969,7 @@ function emailFor(a, stop) {
 function sendOutcome(answer) {
   const { status, json } = answer;
   if (status >= 200 && status < 300 && json?.status === 'sent' && typeof json.id === 'string' && /^[\w-]{1,100}$/.test(json.id)) {
-    return { status: 'sent', ref: `mail:${json.id}`, result: null };
+    return { status: 'sent', ref: `${MAIL_PREFIX}:${json.id}`, result: null };
   }
   const refused = refusal(answer);
   if (refused) return { status: 'failed', ref: null, result: `the mail Worker refused it: ${refused}` };

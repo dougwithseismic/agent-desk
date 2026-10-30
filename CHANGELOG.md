@@ -2,6 +2,14 @@
 
 What changed in the desk kit, newest first. Update a project with `node bin/kit.mjs <project>`.
 
+## 2026-10-30
+
+### A desk that already files its mail one way can listen without changing it · Improved
+- A project with its own mail Worker, whose desks record mail as `acme-mail:<mailbox>:<id>`,
+  sets `DESK_MAIL_PREFIX=acme-mail` and `watch`, `mail` and `send` use the same word, so
+  mail that arrives while a desk listens matches the rows it already has.
+- Try it: "The contract, for a project with its own Worker" in `desks/kit/mail/README.md`.
+
 ## 2026-10-29
 
 ### Setting up desk mail is safer, and you can try it all on your machine (PRD 05) · Improved

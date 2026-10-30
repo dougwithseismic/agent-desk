@@ -159,7 +159,9 @@ with `Authorization: Bearer <token>`, answering:
   current position. Order by something that follows commit order, not by time.
 - `limit` defaults to 50; a full page means there may be more.
 - 400 for a missing `mailbox` or a bad `after`, 401 for a wrong token.
-- A desk records the message in its `inbox` as `mail:<mailbox>:<id>`.
+- A desk records the message in its `inbox` as `mail:<mailbox>:<id>`. If its desks already
+  file mail under another word (`acme-mail:<mailbox>:<id>`), set `DESK_MAIL_PREFIX=acme-mail`
+  in `desks/.env` and `watch` uses that word, so old and new rows match.
 
 `watch` needs only that route. `desk.mjs mail` and `desk.mjs send` use the rest of the API
 above, including `check: true`, so they need the kit's Worker.
