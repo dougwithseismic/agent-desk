@@ -78,16 +78,28 @@ possible infrastructure".
 - `node desks/desk.mjs watch <desk>` asks the project's mail Worker for new mail at those
   addresses (`DESK_MAIL_URL`, `DESK_MAIL_TOKEN` in `desks/.env`). When there's some, it
   saves where it got to in the database, prints one line per email and exits. The exit
-  wakes the session. It also exits after a quiet spell (25 minutes by default) so it works
-  under any background runner.
+  wakes the session.
+- Since PRD 06 (30 Oct) it also wakes the chat for the agent's tasks and checks as they
+  come due (once each while they stay due), and for the desk's schedule, a `Round:` line
+  in `desk.md` such as `Round: weekdays 09:00`, in the listening machine's local time.
+  Several missed slots make one wake that says how many. A desk without `Mail:` listens
+  for these without mail settings. What has woken the chat is kept in the `listeners`
+  table, so a restart never repeats a wake and a chat that was closed catches up once.
+- It waits as long as it takes: no quiet-spell exit, so no idle wakes. `--max` still ends
+  a quiet wait, for a runner that needs it. (Until 30 Oct it exited after 25 quiet minutes.)
 - It makes no model calls while waiting. The token never reaches the chat.
-- The first run starts from now. The backlog is the round's job, which `listen` does first.
+- The first run starts from now, for mail, tasks and rounds. The backlog is the round's
+  job, which `listen` does first.
 - Mail recorded in `inbox` for another desk, from an address that desk doesn't own, is a
   handover. It wakes that desk once.
 - Only one person listens to a desk at a time: `watch` holds the lock `listen:<desk>`.
+  `status` shows who, and when their listener last looked. A running `watch` stops at its
+  next look if the lock changes hands or a newer `watch` for the desk starts, so one desk
+  never wakes two chats.
 - A wake line carries the id, the address and the sender only, never the subject or body.
   The session reads the email itself, as data.
-- A woken desk answers and records what came in. It starts no new outreach; rounds do that.
+- A woken desk answers and records what came in, or does the task or check it was woken
+  for. It starts no new outreach; rounds do that, and a round line runs one.
 
 ## The mail Worker
 

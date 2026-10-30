@@ -50,6 +50,7 @@ Headline: clicks-28d
 Target: <the number they chose, and by when>
 Needs: <environment variables the round uses>
 Mail: <the desk's own email addresses, if it answers mail>
+Round: <when its round is due, if it runs on a schedule: weekdays 09:00>
 
 ## Purpose
 What it's for, who it serves, who owns it, and what "working" looks like.
@@ -82,7 +83,11 @@ The header lines matter to the script: `Headline:` names the measure the board s
 `Target:` is shown beside it, `Needs:` lists environment variables `doctor` checks, and
 `Mail:` lists the addresses the desk answers. An address belongs to one desk, and
 `node desks/desk.mjs watch <desk>` listens to those addresses, through the project's mail
-Worker. Leave `Mail:` out if the desk doesn't answer email.
+Worker. Leave `Mail:` out if the desk doesn't answer email. `Round:` says when a listening
+chat runs the round on its own: days (`daily`, `weekdays`, `weekends`, or names such as
+`mon thu`) and 24-hour times on the listening machine's clock (`Round: mon thu 08:30, 14:00`).
+Leave it out and rounds happen when someone asks for one. `watch` also wakes the chat for the
+agent's tasks and checks as they come due, with or without either line.
 
 ## schema.sql: the desk's own tables
 

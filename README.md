@@ -37,6 +37,10 @@ its mail with `node desks/desk.mjs mail`, and `node desks/desk.mjs send <action 
 an approved reply exactly as stored and records what happened. One desk is one agent at
 work, and a project can have as many as it needs. Desks never read the person's own inbox.
 
+A listening chat hears more than mail: the agent's tasks and checks as they come due, and
+the desk's schedule, a `Round:` line such as `Round: weekdays 09:00`, where it runs a
+round. A desk without mail can listen for those alone. `status` shows who is listening.
+
 ## What lands in a project
 
 ```text

@@ -37,11 +37,11 @@ What "desks answer mail as it arrives" needs before it's finished:
 Decided 30 Oct (`docs/DECISIONS.md`, "Desks work in their own chat"). PRDs get written when
 they're claimed.
 
-- [ ] **PRD 06** The desk's chat hears everything. `watch` wakes the chat for tasks that
-      come due and for the desk's schedule as well as for mail, with one line saying why.
-      A quiet spell doesn't wake the chat just to start listening again (today that's
-      every 25 minutes). `/desk` says which desks are listening, and a desk that was
-      closed catches up when it listens again. Needs nothing else.
+- [x] (merged 2026-10-30) **PRD 06** The desk's chat hears everything
+      (`docs/prds/06-chat-hears-everything.md`). `watch` wakes the chat for tasks that
+      come due and for the desk's `Round:` schedule as well as for mail, with one line
+      saying why. No idle wakes, a closed chat catches up once, and `status` says who is
+      listening.
 - [ ] **PRD 07** Desk tools. `desk.mjs` serves typed tools over MCP (no dependencies):
       status, inbox, read, claim, send, a batch send under a lock, record, lock and unlock.
       A claim that gets nothing is an error, a Worker timeout is retried once and then

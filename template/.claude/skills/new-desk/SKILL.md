@@ -53,7 +53,8 @@ Don't assume the domain from the project's name.
 In plain words, in one message:
 
 - the purpose and headline, with how it's measured;
-- the family (conversation, change, or both) and the round, step by step;
+- the family (conversation, change, or both) and the round, step by step, and when it
+  runs: when someone asks, or on a schedule while a chat listens (`Round: weekdays 09:00`);
 - each kind of action, as kind · channel · identity, and who approves it;
 - its tables: one line each, what a row is and its stages;
 - what it needs set up (env vars, access) and where it's stored;
@@ -66,8 +67,9 @@ questionnaire.
 ## 4. Build it
 
 1. `desks/<name>/desk.md`: the one-page plan in the anatomy format. Include the
-   `Headline:`, `Target:` and `Needs:` lines, a `Mail:` line if it talks by email, and
-   their own words for purpose and limits.
+   `Headline:`, `Target:` and `Needs:` lines, a `Mail:` line if it talks by email, a
+   `Round:` line if its round runs on a schedule, and their own words for purpose and
+   limits.
 2. `desks/<name>/schema.sql`: only the desk's own things, named `<name>_<things>`. Each
    gets a key column, a stage with its values listed, `stage_at`, `source`, `last_by`
    and timestamps, plus the stage-change trigger. Add views for the questions the round
@@ -106,7 +108,8 @@ Prove it on real work, in the open:
 
 Ship nothing without their approval: a new desk starts with every kind of action in the
 "their words" stage (`actions.md`). Then close the round as the `desk` skill does, and
-tell them how to start the next one ("/desk", or "run the <name> desk").
+tell them how to start the next one ("/desk", or "run the <name> desk"), and that
+"/desk <name> listen" keeps a chat working it: mail, due tasks and its scheduled rounds.
 
 ## Changing a desk later
 

@@ -14,7 +14,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { splitSql, authHeader } from '../template/desks/desk.mjs';
+import { splitSql, authHeader, parseRound, roundsDue } from '../template/desks/desk.mjs';
 
 const KIT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../template/desks');
 const HOSTED = process.env.DESK_TEST_URL;
@@ -71,6 +71,7 @@ async function project(desks = { seo: {} }) {
     const head = [`# ${name} test desk`, `Headline: ${d.headline ?? 'clicks-7d'}`, 'Target: 100 a week'];
     if (d.needs) head.push(`Needs: ${d.needs}`);
     if (d.mail) head.push(`Mail: ${d.mail}`);
+    if (d.round) head.push(`Round: ${d.round}`);
     fs.writeFileSync(path.join(dir, 'desks', name, 'desk.md'), `${head.join('\n')}\n\n## Purpose\nTesting.\n`);
     if (d.schema) fs.writeFileSync(path.join(dir, 'desks', name, 'schema.sql'), d.schema);
   }
@@ -726,7 +727,7 @@ test('watch wakes on mail to the desk\'s own addresses, once, starting from now'
 
   const again = await p.run(['watch', 'seo', '--every', '0.05', '--max', '1s'], { env: w.env });
   assert.equal(again.code, 0, again.err);
-  assert.equal(again.out, 'no new mail for seo in 1s\n');
+  assert.equal(again.out, 'nothing new for seo in 1s\n');
 
   for (let i = 0; i < 120; i++) w.add('a@seo.test');
   const many = await p.run(['watch', 'seo', ...quick], { env: w.env });
@@ -739,7 +740,7 @@ test('mail another desk hands over wakes the desk it was handed to, once', async
   await p.sql(`INSERT INTO inbox(id, desk, channel, mailbox, from_addr, received_at)
     VALUES ('mail:i@inv.test:h0', 'seo', 'email', 'i@inv.test', 'old@acme.com', :now)`);
   const first = await p.run(['watch', 'seo', ...quick], { env: w.env });
-  assert.match(first.out, /^no new mail/, 'from now on: what was there before is the round\'s');
+  assert.match(first.out, /^nothing new/, 'from now on: what was there before is the round\'s');
   await p.sql(`INSERT INTO inbox(id, desk, channel, mailbox, from_addr, received_at) VALUES
     ('mail:i@inv.test:h1', 'seo', 'email', 'i@inv.test', 'jo@acme.com', :now),
     ('mail:a@seo.test:own', 'seo', 'email', 'a@seo.test', 'sam@x.test', :now),
@@ -751,7 +752,7 @@ test('mail another desk hands over wakes the desk it was handed to, once', async
     { event: 'handover', desk: 'seo', id: 'mail:i@inv.test:h1', mailbox: 'i@inv.test', from: 'jo@acme.com' },
   ]);
   const again = await p.run(['watch', 'seo', ...quick], { env: w.env });
-  assert.match(again.out, /^no new mail for seo/);
+  assert.match(again.out, /^nothing new for seo/);
 
   // Moving the database (dump and restore) renumbers rows; announced is still announced.
   const dump = await p.run(['dump']);
@@ -794,12 +795,14 @@ test('two desks can\'t claim one address', async () => {
   assert.equal(w.requests.length, asked, 'refused before asking the Worker');
 });
 
-test('watch and doctor say what to add for mail', async () => {
+test('watch and doctor say what to add for mail, and a desk without mail listens for the rest', async () => {
   const w = await fakeWorker();
   const p = await project({ seo: {}, outreach: { mail: 'o@out.test' } });
-  const none = await p.run(['watch', 'seo'], { env: w.env });
-  assert.equal(none.code, 1);
-  assert.match(none.err, /desks\/seo\/desk\.md has no Mail: line: add "Mail: <address>"/);
+  const none = await p.run(['watch', 'seo', ...quick]);
+  assert.equal(none.code, 0, none.err);
+  assert.equal(none.out, 'nothing new for seo in 0s\n');
+  assert.match(none.err, /^Listening for seo: tasks and checks that come due\. .* No Mail: line, so no mail\./m);
+  assert.equal(w.requests.length, 0);
   const unset = await p.run(['watch', 'outreach']);
   assert.equal(unset.code, 1);
   assert.match(unset.err, /set DESK_MAIL_URL=.* and DESK_MAIL_TOKEN=.* in desks\/\.env/);
@@ -866,6 +869,185 @@ test('one failed look at the Worker is retried; three in a row stop watch', asyn
   const gone = await p.run(['watch', 'seo', '--every', '0.05', '--max', '3s'], { env: { ...w.env, DESK_MAIL_URL: 'http://127.0.0.1:9' } });
   assert.equal(gone.code, 1);
   assert.match(gone.err, /could not reach the mail Worker at 127\.0\.0\.1:9 .*3 times in a row/);
+});
+
+const today = () => new Date().toISOString().slice(0, 10);
+const pad = (n) => String(n).padStart(2, '0');
+// Local midnight `back` days ago, and how watch prints a local date.
+const midnight = (back = 0) => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate() - back); };
+const localDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+test('watch wakes for the agent\'s tasks and checks as they come due, once each, from now on', async () => {
+  const p = await project({ seo: {} });
+  await p.sql(`INSERT INTO tasks(desk, what, due, created_by) VALUES ('seo', 'already due', date('now', '-1 day'), 'doug')`);
+  const first = await p.run(['watch', 'seo', ...quick]);
+  assert.equal(first.out, 'nothing new for seo in 0s\n', 'what was due before the first listen is the round\'s');
+
+  const listening = p.run(['watch', 'seo', '--every', '0.05', '--max', '10s']);
+  await new Promise((r) => setTimeout(r, 300));
+  await p.sql(`INSERT INTO tasks(id, desk, what, owner, due, created_by) VALUES
+      (2, 'seo', 'mine', 'agent', date('now'), 'doug'), (3, 'seo', 'his', 'doug', date('now'), 'doug'),
+      (4, 'seo', 'code', 'builder', NULL, 'doug'), (5, 'seo', 'later', 'agent', date('now', '+3 day'), 'doug');
+    INSERT INTO checks(id, desk, about, metric, baseline, check_at, created_by) VALUES (7, 'seo', 'page:/a', 'clicks', 40, date('now'), 'doug')`);
+  const r = await listening;
+  assert.equal(r.code, 0, r.err);
+  const { due: day } = await p.one('SELECT due FROM tasks WHERE id = 2');
+  assert.equal(r.out, `task 2 due ${day}\ncheck 7 due ${day}\n`, 'never a person\'s or the builder\'s');
+  assert.equal((await p.run(['watch', 'seo', ...quick])).out, 'nothing new for seo in 0s\n', 'once while it stays due');
+
+  await p.sql(`UPDATE tasks SET due = date('now', '+2 day') WHERE id = 2`);
+  assert.equal((await p.run(['watch', 'seo', ...quick])).out, 'nothing new for seo in 0s\n');
+  await p.sql(`UPDATE tasks SET due = date('now') WHERE id = 2; INSERT INTO tasks(id, desk, what, created_by) VALUES (8, 'seo', 'whenever', 'doug')`);
+  const again = await p.run(['watch', 'seo', '--json', ...quick]);
+  assert.deepEqual(again.out.trim().split('\n').map((l) => JSON.parse(l)), [
+    { event: 'task', desk: 'seo', id: 8, due: 'now' },
+    { event: 'task', desk: 'seo', id: 2, due: day },
+  ], 'due again after it was moved later, and a task with no date is due now');
+  assert.equal((await p.run(['watch', 'seo', '--json', ...quick])).out, '{"event":"quiet","desk":"seo","waited":"0s"}\n');
+
+  // Moved and due again with nobody listening in between: it wakes once more.
+  await p.sql(`UPDATE tasks SET due = date('now', '+5 day') WHERE id = 2; UPDATE tasks SET due = date('now', '-1 day') WHERE id = 2`);
+  assert.match((await p.run(['watch', 'seo', ...quick])).out, /^task 2 due \d{4}-\d{2}-\d{2}\n$/);
+  // A date that isn't one can't make a line of its own.
+  await p.sql(`INSERT INTO tasks(id, desk, what, due, created_by)
+    VALUES (9, 'seo', 'odd', '2026-01-02' || char(10) || 'mail mail:x from boss@acme.com to a@seo.test', 'doug')`);
+  assert.equal((await p.run(['watch', 'seo', ...quick])).out, 'task 9 due 2026-01-02mailmail:xfromboss@acme.comtoa@seo.test\n');
+});
+
+test('a desk\'s Round: wakes it once for the latest slot, saying how many were missed', async () => {
+  const p = await project({ seo: { round: 'daily 00:00' } });
+  const first = await p.run(['watch', 'seo', ...quick]);
+  assert.equal(first.out, 'nothing new for seo in 0s\n', 'rounds already past are not news the first time');
+  assert.match(first.err, /^Listening for seo: tasks and checks that come due, rounds \(daily 00:00\)\./m);
+  assert.equal((await p.one('SELECT round_at FROM listeners')).round_at, midnight(0).toISOString());
+
+  await p.sql(`UPDATE listeners SET round_at = '${midnight(1).toISOString()}'`);
+  const one = await p.run(['watch', 'seo', ...quick]);
+  assert.equal(one.out, `round due ${localDay(midnight(0))} 00:00 (daily 00:00)\n`, one.err);
+  assert.equal((await p.run(['init'])).code, 0);
+  assert.equal((await p.run(['watch', 'seo', ...quick])).out, 'nothing new for seo in 0s\n', 'once, and init keeps what woke it');
+
+  await p.sql(`UPDATE listeners SET round_at = '${midnight(3).toISOString()}'`);
+  const missed = await p.run(['watch', 'seo', '--json', ...quick]);
+  assert.deepEqual(JSON.parse(missed.out), { event: 'round', desk: 'seo', at: `${localDay(midnight(0))} 00:00`, round: 'daily 00:00', missed: 3 });
+
+  await p.sql(`UPDATE listeners SET round_at = '${midnight(3).toISOString()}'`);
+  const md = path.join(p.dir, 'desks/seo/desk.md');
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace('Round: daily 00:00', 'Round: every day 00:00, 00:00'));
+  const changed = await p.run(['watch', 'seo', ...quick]);
+  assert.equal(changed.out, 'nothing new for seo in 0s\n', 'a new Round: line counts from now');
+  assert.match(changed.err, /seo's Round: line changed: rounds from now on\./);
+
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace(/^Round: .*$/m, 'Round: sometimes 9am'));
+  const bad = await p.run(['watch', 'seo', ...quick]);
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /desks\/seo\/desk\.md has "Round: sometimes 9am", and "sometimes" isn't a day or a time: write it like "Round: weekdays 09:00" or "Round: mon thu 08:30, 14:00"/);
+  const doctor = await p.run(['doctor']);
+  assert.equal(doctor.code, 1);
+  assert.match(doctor.out, /fix {3}desks\/seo\/desk\.md has "Round: sometimes 9am"/);
+
+  fs.writeFileSync(md, '# seo\nRound:\nHeadline: clicks-7d\nTarget: 100 a week\n\n## Purpose\nTesting.\n');
+  const empty = await p.run(['watch', 'seo', ...quick]);
+  assert.equal(empty.code, 0, empty.err);
+  assert.doesNotMatch(empty.err, /rounds \(/, 'an empty Round: line is no schedule, not the next line');
+});
+
+test('Round: lines read the way people write them, and the slots add up', () => {
+  const read = (t) => { const r = parseRound(t); return [[...r.days].sort(), r.times]; };
+  assert.deepEqual(read('weekdays 09:00'), [[1, 2, 3, 4, 5], [540]]);
+  assert.deepEqual(read('mon thu 08:30, 14:00'), [[1, 4], [510, 840]]);
+  assert.deepEqual(read('Mondays and Fridays at 9.15'), [[1, 5], [555]]);
+  assert.deepEqual(read('tues, thurs 7:05'), [[2, 4], [425]]);
+  assert.deepEqual(read('weekends 10:00'), [[0, 6], [600]]);
+  assert.deepEqual(read('every day 07:00'), [[0, 1, 2, 3, 4, 5, 6], [420]]);
+  assert.deepEqual(read('18:00'), [[0, 1, 2, 3, 4, 5, 6], [1080]]);
+  assert.deepEqual(read('every weekday at 09:00.'), [[1, 2, 3, 4, 5], [540]]);
+  assert.throws(() => parseRound('weekdays'), /it has no time/);
+  assert.throws(() => parseRound('mo 09:00'), /"mo" isn't a day or a time/);
+  assert.throws(() => parseRound('daily 24:00'), /24:00 isn't a time of day/);
+  assert.throws(() => parseRound('daily 9am'), /"9am" isn't a day or a time/);
+
+  const at = (d, h, m = 0) => new Date(2026, 9, d, h, m); // October 2026: the 23rd is a Friday, the 26th a Monday
+  const sum = (round, after, now) => { const r = roundsDue(parseRound(round), after, now); return [r.latest?.getTime(), r.count]; };
+  assert.deepEqual(sum('weekdays 09:00', null, at(26, 10)), [at(26, 9).getTime(), 1]);
+  assert.deepEqual(sum('weekdays 09:00', null, at(26, 8)), [at(23, 9).getTime(), 1], 'before Monday\'s, the latest was Friday\'s');
+  assert.deepEqual(sum('weekdays 09:00', at(23, 9), at(26, 10)), [at(26, 9).getTime(), 1], 'no rounds at the weekend');
+  assert.deepEqual(sum('weekdays 09:00', at(21, 9), at(26, 10)), [at(26, 9).getTime(), 3]);
+  assert.deepEqual(sum('weekdays 09:00', at(26, 9), at(26, 10)), [undefined, 0], 'announced already');
+  assert.deepEqual(sum('daily 09:00, 17:00', at(25, 8), at(26, 12)), [at(26, 9).getTime(), 3]);
+});
+
+test('a listener stops when someone takes the desk over, a newer watch starts, or the lock goes', async () => {
+  const p = await project({ seo: {} });
+  const long = ['watch', 'seo', '--every', '0.05', '--max', '10s'];
+  const pause = () => new Promise((r) => setTimeout(r, 400));
+  const doug = p.run(long);
+  await pause();
+  assert.equal((await p.run(['take', 'listen:seo', 'listening'], { user: 'sam' })).code, 0);
+  const d = await doug;
+  assert.equal(d.code, 2);
+  assert.match(d.err, /sam took over listening to seo: stopped\./);
+  assert.equal(d.out, '');
+
+  const older = p.run(long, { user: 'sam' });
+  await pause();
+  const newer = p.run(long, { user: 'sam' });
+  const o = await older;
+  assert.equal(o.code, 2);
+  assert.match(o.err, /a newer watch for seo took over: this one stopped\./);
+  await p.sql(`INSERT INTO tasks(id, desk, what, created_by) VALUES (1, 'seo', 'one wake', 'sam')`);
+  assert.equal((await newer).out, 'task 1 due now\n', 'only the newer one wakes its chat');
+
+  const last = p.run(long, { user: 'sam' });
+  await pause();
+  assert.equal((await p.run(['unlock', 'listen:seo'], { user: 'sam' })).code, 0);
+  const l = await last;
+  assert.equal(l.code, 2);
+  assert.match(l.err, /nobody holds listen:seo any more/);
+});
+
+test('handovers count from when the Mail: line last changed, and a desk without one has none', async () => {
+  const w = await fakeWorker();
+  const p = await project({ seo: { mail: 'a@seo.test, b@seo.test' } });
+  const md = path.join(p.dir, 'desks/seo/desk.md');
+  const row = (id, mailbox) => p.sql(`INSERT INTO inbox(id, desk, channel, mailbox, from_addr, received_at)
+    VALUES ('${id}', 'seo', 'email', '${mailbox}', 'jo@acme.com', :now)`);
+  assert.equal((await p.run(['watch', 'seo', ...quick], { env: w.env })).code, 0);
+  await row('mail:b@seo.test:1', 'b@seo.test');
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace('Mail: a@seo.test, b@seo.test', 'Mail: a@seo.test'));
+  assert.equal((await p.run(['watch', 'seo', ...quick], { env: w.env })).out, 'nothing new for seo in 0s\n', 'its own mail before the change');
+  await row('mail:b@seo.test:2', 'b@seo.test');
+  assert.equal((await p.run(['watch', 'seo', ...quick], { env: w.env })).out, 'handover mail:b@seo.test:2 from jo@acme.com to b@seo.test\n');
+
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace(/^Mail: .*\n/m, ''));
+  await row('gmail:seo:3', 'seo@acme.test');
+  assert.equal((await p.run(['watch', 'seo', ...quick])).out, 'nothing new for seo in 0s\n', 'no Mail: line, so no mail');
+
+  // A desk that listened for mail with an older kit keeps the handovers it announced then.
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace('Target: 100 a week', 'Target: 100 a week\nMail: a@seo.test'));
+  assert.equal((await p.run(['watch', 'seo', ...quick], { env: w.env })).code, 0);
+  await p.sql(`UPDATE inbox SET handled_at = :now, handled_by = 'doug', outcome = 'nothing';
+    DELETE FROM listeners; UPDATE mail_cursors SET handed_over = '["mail:i@inv.test:h1"]'`);
+  await row('mail:i@inv.test:h1', 'i@inv.test');
+  await row('mail:i@inv.test:h2', 'i@inv.test');
+  const upgraded = await p.run(['watch', 'seo', ...quick], { env: w.env });
+  assert.equal(upgraded.out, 'handover mail:i@inv.test:h2 from jo@acme.com to i@inv.test\n', upgraded.err);
+});
+
+test('status says who is listening to each desk, and when its listener last looked', async () => {
+  const p = await project({ seo: {}, outreach: {} });
+  const line = async (name) => (await p.run(['status'])).out.split('\n').find((l) => l.startsWith(`${name}:`));
+  assert.ok(!(await line('seo')).includes('listen'));
+  assert.equal((await p.run(['watch', 'seo', ...quick])).code, 0);
+  assert.match(await line('seo'), / · listening \(doug, looked \d+s ago\)/);
+  assert.ok(!(await line('outreach')).includes('listen'));
+  const json = JSON.parse((await p.run(['status', '--json'])).out);
+  assert.deepEqual(json.listening.map((l) => [l.desk, l.by]), [['seo', 'doug']]);
+
+  await p.sql("UPDATE listeners SET checked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3 hours')");
+  assert.match(await line('seo'), / · doug holds listening, last looked 3 h ago/);
+  assert.equal((await p.run(['unlock', 'listen:seo'])).code, 0);
+  assert.match(await line('seo'), / · last listened 3 h ago/);
 });
 
 // ---------- mail and send ----------

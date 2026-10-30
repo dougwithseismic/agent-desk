@@ -200,6 +200,20 @@ CREATE TABLE IF NOT EXISTS mail_cursors (
   by TEXT NOT NULL
 );
 
+-- What each desk's listener (desk.mjs watch) has woken its chat for besides new mail, so a
+-- restart never wakes it twice, and a chat that was closed catches up once. Handovers are
+-- kept here as inbox:<id>; mail_cursors.handed_over is no longer used.
+CREATE TABLE IF NOT EXISTS listeners (
+  desk TEXT PRIMARY KEY REFERENCES desks(name),
+  woken_for TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(woken_for)), -- inbox:<id>, task:<id>@<due>, check:<id>@<date>: announced and still open and due
+  own TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(own)), -- the Mail: addresses handovers were worked out against
+  round TEXT,                           -- the Round: line round_at was worked out from
+  round_at TEXT,                        -- the latest scheduled round announced (or skipped at the start)
+  run TEXT,                             -- the watch listening now: a newer one takes over, and this one stops
+  checked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), -- when the listener last looked
+  by TEXT NOT NULL
+);
+
 -- A change, measured later: where it stood before, when to look again, what happened.
 CREATE TABLE IF NOT EXISTS checks (
   id INTEGER PRIMARY KEY,
@@ -371,6 +385,18 @@ CREATE VIEW board AS
     d.target,
     (SELECT max(g.at) FROM log g WHERE g.desk = d.name) AS last_activity
   FROM desks d;
+
+-- Who is listening to each desk (desk.mjs watch holds listen:<desk>), and when its listener
+-- last looked. A desk nobody has listened to has no row.
+DROP VIEW IF EXISTS listening;
+CREATE VIEW listening AS
+  SELECT d.name AS desk, k.by, k.at AS since,
+    nullif(max(coalesce(n.checked_at, ''), coalesce(c.checked_at, '')), '') AS looked_at
+  FROM desks d
+  LEFT JOIN locks k ON k.key = 'listen:' || d.name
+  LEFT JOIN listeners n ON n.desk = d.name
+  LEFT JOIN mail_cursors c ON c.desk = d.name
+  WHERE k.key IS NOT NULL OR n.desk IS NOT NULL OR c.desk IS NOT NULL;
 
 -- Trust in words.
 DROP VIEW IF EXISTS trust_board;

@@ -4,6 +4,19 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-10-30
 
+### A listening desk's chat hears its tasks and its schedule, not only mail (PRD 06) · New
+- While a chat listens to a desk ("/desk <name> listen"), it's woken when one of the
+  agent's tasks or checks comes due, and at the times in the desk's new `Round:` line
+  (`Round: weekdays 09:00`), where it runs a round.
+- It no longer wakes every 25 minutes just to start listening again: it waits as long as
+  it takes.
+- A chat that was closed catches up once when it listens again: one line per task, and one
+  round that says how many were missed.
+- Desks without a `Mail:` line can listen too, for tasks and rounds.
+- `status` says who is listening to each desk, and when their listener last looked.
+- Try it: add `Round:` to a desk's `desk.md` (`desks/kit/guide/anatomy.md`), then
+  "/desk <name> listen".
+
 ### A claim that gets nothing now stops a send chained after it · Fixed
 - `node desks/desk.mjs sql --expect-rows "UPDATE ... RETURNING id" && <send>` exits 1 when
   the claim gets no row back, so the send never runs. Before, "(no rows)" still exited 0,

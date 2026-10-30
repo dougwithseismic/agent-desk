@@ -149,7 +149,7 @@ An end-to-end check.
   let heard = '', said = '';
   watch.stdout.on('data', (d) => { heard += d; });
   watch.stderr.on('data', (d) => { said += d; });
-  await until(watch, () => said.includes('Listening for mail'), 10000, 'watch').catch((e) => { throw new Error(`${e.message}:\n${said}`); });
+  await until(watch, () => said.includes('Listening for seo:'), 10000, 'watch').catch((e) => { throw new Error(`${e.message}:\n${said}`); });
   const deliver = async (raw) => {
     const r = await fetch(`${url}/cdn-cgi/handler/email?from=jo@acme.com&to=clara@seo.test`, { method: 'POST', body: raw });
     assert.ok(r.ok, `the Worker refused the email: ${r.status} ${await r.text()}`);

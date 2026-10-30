@@ -14,8 +14,9 @@
 //   node desks/desk.mjs restore <file.sql>        load a dump into an empty database
 //   node desks/desk.mjs doctor                    check settings, connection, schema and each desk's needs
 //   node desks/desk.mjs token                     make a key and token for a hosted database
-//   node desks/desk.mjs watch <desk>              wait for mail to the desk's Mail: addresses, print a line
-//                                                 for each and exit (--every 30s, --max 25m)
+//   node desks/desk.mjs watch <desk>              wait until the desk has something to do (mail, a
+//                                                 handover, a due task or check, its Round: time), print a
+//                                                 line for each and exit (--every 30s; --max ends a quiet wait)
 //   node desks/desk.mjs mail inbox|search <text>|sent   mail in the mail Worker (--desk, --mailbox, --limit,
 //                                                 --key for sent)
 //   node desks/desk.mjs mail read|thread <id>     one email in full, or its whole conversation
@@ -439,8 +440,9 @@ function sha(text) {
 }
 
 // A desk is a folder in desks/ with a desk.md. Its header lines before the first ##
-// can say Headline:, Target:, Needs: (env var names, comma separated) and Mail: (the
-// addresses the desk answers, comma separated).
+// can say Headline:, Target:, Needs: (env var names, comma separated), Mail: (the
+// addresses the desk answers, comma separated) and Round: (when its rounds are due, such as
+// weekdays 09:00).
 function desksOnDisk() {
   return fs.readdirSync(DESKS, { withFileTypes: true })
     .filter((d) => d.isDirectory() && fs.existsSync(path.join(DESKS, d.name, 'desk.md')))
@@ -448,7 +450,7 @@ function desksOnDisk() {
       const dir = path.join(DESKS, d.name);
       const md = fs.readFileSync(path.join(dir, 'desk.md'), 'utf8');
       const head = md.split(/^## /m)[0];
-      const field = (k) => head.match(new RegExp(`^${k}:\\s*(.+)$`, 'mi'))?.[1].trim();
+      const field = (k) => head.match(new RegExp(`^${k}:[ \\t]*(.+)$`, 'mi'))?.[1].trim();
       return {
         name: d.name,
         dir,
@@ -457,6 +459,7 @@ function desksOnDisk() {
         target: field('Target'),
         needs: (field('Needs') || '').split(/[,\s]+/).filter((x) => /^[A-Z][A-Z0-9_]*$/.test(x)),
         mail: [...new Set((field('Mail') || '').toLowerCase().split(/[,\s]+/).filter((x) => /^[^@<>]+@[^@<>]+\.[^@<>]+$/.test(x)))],
+        round: field('Round'),
       };
     });
 }
@@ -535,6 +538,15 @@ async function init(flags) {
   db.close();
 }
 
+// Whether a desk's listener is looking: someone holds listen:<desk> and it looked lately. A
+// chat that was woken stops looking while it works, so a gap can be work, not a closed app.
+function listeningNow({ by, looked }) {
+  const gap = looked ? Math.max(0, Date.now() - Date.parse(looked)) : null;
+  if (!by) return looked ? `last listened ${ago(gap)} ago` : 'not listening';
+  if (gap !== null && gap < 15 * 60000) return `listening (${by}, looked ${ago(gap)} ago)`;
+  return `${by} holds listening, last looked ${looked ? `${ago(gap)} ago` : 'never'}`;
+}
+
 async function status(flags, deskName) {
   const db = await open();
   const desk = deskName ?? flags.desk ?? null;
@@ -552,14 +564,16 @@ async function status(flags, deskName) {
     SELECT id, coalesce(desk, 'all') AS desk, kind, lesson FROM lessons
       WHERE (desk IS NULL OR ${f()}) AND id NOT IN (SELECT replaces FROM lessons WHERE replaces IS NOT NULL)
       ORDER BY id DESC LIMIT 10;
+    SELECT desk, by, since, looked_at FROM listening WHERE ${f()};
   `, v);
   if (flags.json) {
-    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons'];
+    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening'];
     console.log(JSON.stringify(Object.fromEntries(results.map((r, i) => [names[i], asObjects(r.cols, r.rows)])), null, 2));
     db.close();
     return;
   }
-  const [board, waiting, due, flight, locks, holds, trust, lessons] = results;
+  const [board, waiting, due, flight, locks, holds, trust, lessons, listening] = results;
+  const heard = new Map(listening.rows.map(([d, by, , looked]) => [d, { by, looked }]));
   console.log(`${HOSTED ? 'Hosted' : 'Local'} database ${db.where}, you are ${USER ?? '(DESK_USER not set)'}.`);
   if (!board.rows.length) console.log(desk ? `No desk called ${desk}: run init after adding desks/${desk}/desk.md.` : 'No desks yet.');
   for (const r of board.rows) {
@@ -567,6 +581,8 @@ async function status(flags, deskName) {
     const bits = [`${w} waiting`, `${d} due`, `${fl} in flight`];
     if (u) bits.push(`${u} UNCERTAIN`);
     if (l) bits.push(`${l} locked`);
+    const ear = heard.get(name);
+    if (ear) bits.push(listeningNow(ear));
     let line = `${name}: ${bits.join(' · ')}`;
     if (headline) line += ` · ${headline} ${value ?? 'not measured yet'}${previous !== null && previous !== undefined ? ` (was ${previous})` : ''}`;
     if (target) line += ` · target ${target}`;
@@ -638,11 +654,13 @@ async function take(flags, key, doing) {
   return 0;
 }
 
-// ---------- mail: the desk's listener ----------
+// ---------- the desk's listener ----------
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const retryable = (msg) => Object.assign(new DeskError(msg), { retry: true });
-const ago = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)}s`);
+const ago = (ms) => (ms >= 172800000 ? `${Math.round(ms / 86400000)} days`
+  : ms >= 7200000 ? `${Math.round(ms / 3600000)} h`
+    : ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)}s`);
 
 // Text from outside (an id, an address), made safe to print as one word on one line.
 const oneWord = (s) => String(s ?? '').replace(/[\s\p{C}]/gu, '').slice(0, 200);
@@ -724,30 +742,100 @@ function mailDesk(desks, name) {
   return desk;
 }
 
-// Waits, with no model calls, for mail to the desk's own addresses and for mail another
-// desk handed over. Prints a line for each on stdout and exits 0, which wakes the session
-// that started it; after --max with nothing, it says so and exits 0. Everything else goes
-// to stderr. One person listens to a desk: the lock listen:<desk>.
+// A desk's Round: line, such as "weekdays 09:00" or "mon thu 08:30, 14:00": the days of the
+// week it runs on (0 is Sunday) and its times in minutes after midnight, in this machine's
+// local time. No days means every day. Throws a DeskError saying what it can't read.
+const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const ROUND_EXAMPLE = '"Round: weekdays 09:00" or "Round: mon thu 08:30, 14:00"';
+
+export function parseRound(text) {
+  const days = new Set();
+  const times = new Set();
+  const words = String(text).toLowerCase().replace(/\bevery\s+day\b/g, 'daily').split(/[\s,]+/)
+    .map((w) => w.replace(/\.$/, '')).filter(Boolean);
+  for (const w of words) {
+    const t = w.match(/^(\d{1,2})[:.](\d{2})$/);
+    const stem = w.replace(/s$/, '');
+    if (t) {
+      if (Number(t[1]) > 23 || Number(t[2]) > 59) fail(`${w} isn't a time of day`);
+      times.add(Number(t[1]) * 60 + Number(t[2]));
+    } else if (w === 'daily' || w === 'everyday') [0, 1, 2, 3, 4, 5, 6].forEach((d) => days.add(d));
+    else if (stem === 'weekday') [1, 2, 3, 4, 5].forEach((d) => days.add(d));
+    else if (stem === 'weekend') [0, 6].forEach((d) => days.add(d));
+    else if (!['at', 'and', 'on', 'every'].includes(w)) {
+      const day = stem.length >= 3 ? DAY_NAMES.findIndex((n) => n.startsWith(stem)) : -1;
+      if (day < 0) fail(`"${w}" isn't a day or a time`);
+      days.add(day);
+    }
+  }
+  if (!times.size) fail('it has no time');
+  if (!days.size) [0, 1, 2, 3, 4, 5, 6].forEach((d) => days.add(d));
+  return { days, times: [...times].sort((a, b) => a - b) };
+}
+
+// The desk's schedule, read from its Round: line: null when it has none.
+function roundOf(desk) {
+  if (!desk.round) return null;
+  try {
+    return { text: line1(desk.round), ...parseRound(desk.round) };
+  } catch (e) {
+    if (!(e instanceof DeskError)) throw e;
+    return fail(`desks/${desk.name}/desk.md has "Round: ${line1(desk.round)}", and ${e.message}: write it like ${ROUND_EXAMPLE}`);
+  }
+}
+
+// The scheduled rounds after `after` (a Date; null for none) up to `now`: the latest, and
+// how many there were (looking back a year at most). With no `after`, the latest only.
+export function roundsDue(round, after, now) {
+  let latest = null;
+  let count = 0;
+  for (let back = 0; back <= 366 && !(latest && !after); back++) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back);
+    if (after && new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1) <= after) break;
+    if (!round.days.has(day.getDay())) continue;
+    for (const t of round.times.toReversed()) {
+      const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(t / 60), t % 60);
+      if (at > now || (after && at <= after)) continue;
+      latest ??= at;
+      count++;
+    }
+  }
+  return { latest, count };
+}
+
+// A time as this machine's local date and time: 2026-10-30 09:00.
+const localStamp = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+// Waits, with no model calls, until the desk has something to do: mail to its own
+// addresses, mail another desk handed over, a task or check of the agent's that comes due,
+// or a round on its schedule. Prints a line for each on stdout and exits 0, which wakes the
+// chat that started it. With --max, a quiet spell that long ends it too, saying so. Everything
+// else goes to stderr. One person listens to a desk: the lock listen:<desk>.
 async function watch(flags, deskName) {
   const name = deskName ?? deskOf(flags);
   if (!name) fail('usage: desk.mjs watch <desk>');
   const desks = desksOnDisk();
-  const desk = mailDesk(desks, name);
-  const clashes = mailClashes(desks).filter(([a]) => desk.mail.includes(a));
-  if (clashes.length) {
-    fail(`${clashes.map(([a, names]) => `${a} is in the Mail: line of ${names.join(' and ')}`).join('; ')}: an address belongs to one desk, so take it out of the others`);
+  const desk = desks.find((d) => d.name === name);
+  if (!desk) fail(`no desk called ${name}: a desk is a folder in desks/ with a desk.md`);
+  const round = roundOf(desk);
+  const hasMail = desk.mail.length > 0;
+  if (hasMail) {
+    const clashes = mailClashes(desks).filter(([a]) => desk.mail.includes(a));
+    if (clashes.length) {
+      fail(`${clashes.map(([a, names]) => `${a} is in the Mail: line of ${names.join(' and ')}`).join('; ')}: an address belongs to one desk, so take it out of the others`);
+    }
+    mailSettings();
   }
-  mailSettings();
   if (!USER) fail('set DESK_USER in desks/.env first, so the lock says who is listening');
   const every = duration(flags.every, 30000, '--every');
-  const max = duration(flags.max, 25 * 60000, '--max');
+  const max = flags.max === undefined ? Infinity : duration(flags.max, 0, '--max');
   const own = new Set(desk.mail);
   const mailboxes = desk.mail.map((a) => ['mailbox', a]);
   const key = `listen:${desk.name}`;
-  const { host, pathname } = new URL(MAIL_URL);
-  const source = `${host}${pathname.replace(/\/$/, '')} ${[...own].sort().join(',')}`;
+  const { host, pathname } = hasMail ? new URL(MAIL_URL) : {};
+  const source = hasMail ? `${host}${pathname.replace(/\/$/, '')} ${[...own].sort().join(',')}` : null;
 
-  const q = (text, values) => query(text, { desk: desk.name, key, source, ...values });
+  const q = (text, values) => query(text, { desk: desk.name, key, source, round: round?.text ?? null, ...values });
   let fails = 0;
   const attempt = async (step) => {
     for (;;) {
@@ -760,48 +848,95 @@ async function watch(flags, deskName) {
     }
   };
 
-  const [ready] = await q(`SELECT (SELECT count(*) FROM sqlite_schema WHERE name = 'mail_cursors'),
+  const [ready] = await q(`SELECT (SELECT count(*) FROM sqlite_schema WHERE name IN ('mail_cursors', 'listeners')),
     (SELECT count(*) FROM desks WHERE name = :desk)`);
-  if (!ready.rows[0][0]) fail('the database is older than the kit: run node desks/desk.mjs init');
+  if (ready.rows[0][0] < 2) fail('the database is older than the kit: run node desks/desk.mjs init');
   if (!ready.rows[0][1]) fail(`${desk.name} is not in the database yet: run node desks/desk.mjs init`);
-  const [, held, saved] = await q(`
-    INSERT INTO locks(key, by, desk, doing) VALUES (:key, :me, :desk, 'listening for mail')
+  // This run of watch is the one listening: a newer run for the desk takes over from it.
+  const run = crypto.randomUUID();
+  const mine = 'EXISTS (SELECT 1 FROM locks WHERE key = :key AND by = :me)';
+  const [, , held, saved, state] = await q(`
+    INSERT INTO locks(key, by, desk, doing) VALUES (:key, :me, :desk, 'listening')
       ON CONFLICT(key) DO UPDATE SET doing = excluded.doing, desk = excluded.desk,
         at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE locks.by = excluded.by;
+    UPDATE listeners SET run = :run WHERE desk = :desk AND ${mine};
     SELECT by, at FROM locks WHERE key = :key;
-    SELECT cursor, source, handed_over, checked_at FROM mail_cursors WHERE desk = :desk;`);
+    SELECT cursor, source, handed_over FROM mail_cursors WHERE desk = :desk;
+    SELECT woken_for, round, round_at, checked_at, own FROM listeners WHERE desk = :desk;`, { run });
   const [holder, since] = held.rows[0];
   if (holder !== USER) {
-    const checked = saved.rows[0]?.[3];
-    console.error(`${holder} is listening to ${desk.name} (since ${since}${checked ? `, last checked ${checked}` : ''}). Leave it, or take it over with: node desks/desk.mjs take ${key} "listening for mail"`);
+    const checked = state.rows[0]?.[3];
+    console.error(`${holder} is listening to ${desk.name} (since ${since}${checked ? `, last looked ${checked}` : ''}). Leave it, or take it over with: node desks/desk.mjs take ${key} "listening"`);
     return 2;
   }
 
-  // Handovers: open email inbox rows for this desk that came to an address it doesn't own.
-  // handed_over keeps the ones already announced that are still open.
-  const handovers = `SELECT id, mailbox, from_addr FROM inbox WHERE desk = :desk AND channel = 'email'
-    AND handled_at IS NULL AND lower(mailbox) NOT IN (SELECT value FROM json_each(:own)) ORDER BY received_at, id`;
-  const ownJson = JSON.stringify([...own]);
-  let [after, was, announced] = saved.rows[0] ?? [];
-  if (was !== source) {
-    console.error(was ? `${desk.name}'s addresses or mail Worker changed: listening from now.` : `First time listening for ${desk.name}: from now on.`);
+  // Handovers: open email inbox rows for this desk that came to an address it doesn't own
+  // (none for a desk without a Mail: line). Due: the agent's open tasks and checks that are
+  // due, with the date they're due for, so one moved and due again counts again.
+  // listeners.woken_for keeps those already announced while they stay open and due.
+  const handovers = `SELECT id, mailbox, from_addr, received_at FROM inbox WHERE desk = :desk AND channel = 'email'
+    AND handled_at IS NULL AND :mail = 1 AND lower(mailbox) NOT IN (SELECT value FROM json_each(:own))`;
+  const dueRefs = `SELECT type || ':' || id || '@' || coalesce(due, '') AS ref FROM due WHERE desk = :desk AND owner = 'agent'`;
+  const wokenNow = `SELECT json_group_array(ref) FROM (SELECT 'inbox:' || id AS ref FROM (${handovers}) UNION ALL ${dueRefs})`;
+  const ownJson = JSON.stringify([...own].sort());
+  const known = { own: ownJson, mail: hasMail ? 1 : 0, run };
+  const [after0, was, handedOver] = saved.rows[0] ?? [];
+  let after = after0;
+  let first = !state.rows[0];
+  if (hasMail && was !== source) {
+    console.error(was ? `${desk.name}'s addresses or mail Worker changed: listening for mail from now.`
+      : first ? `First time listening for ${desk.name}: from now on.` : `Listening for ${desk.name}'s mail from now on.`);
+    first = false;
     const page = await attempt(() => mailGet('/v1/changes', [...mailboxes, ['after', 'latest']]));
     if (page?.cursor == null) fail(`the mail Worker at ${host} gave no cursor for after=latest: is it the desk mail Worker? (kit/mail/README.md)`);
     const [, row] = await attempt(() => q(`
-      INSERT INTO mail_cursors(desk, source, cursor, handed_over, by)
-        VALUES (:desk, :source, :cursor, (SELECT json_group_array(id) FROM (${handovers})), :me)
+      INSERT INTO mail_cursors(desk, source, cursor, by) VALUES (:desk, :source, :cursor, :me)
         ON CONFLICT(desk) DO UPDATE SET source = excluded.source, cursor = excluded.cursor,
           checked_at = excluded.checked_at, by = excluded.by;
-      SELECT cursor, handed_over FROM mail_cursors WHERE desk = :desk;`, { cursor: String(page.cursor), own: ownJson }));
-    [after, announced] = row.rows[0];
+      SELECT cursor FROM mail_cursors WHERE desk = :desk;`, { cursor: String(page.cursor) }));
+    [after] = row.rows[0];
   }
 
-  // One look: new mail from the Worker (a full page may mean more), then handovers. The
-  // cursor and the handovers announced are saved together before anything is printed.
-  const poll = async () => {
+  // The first time, what's already due is the round's job, and so are rounds already past. A
+  // desk that listened for mail with an older kit keeps the handovers it announced then. A
+  // changed Mail: line makes handovers count from now, and a changed Round: line rounds.
+  const [, roundWas, , , ownWas] = state.rows[0] ?? [];
+  const roundText = round?.text ?? null;
+  const from = round ? roundsDue(round, null, new Date()).latest.toISOString() : null;
+  const steps = [];
+  if (!state.rows[0]) {
+    if (first) console.error(`First time listening for ${desk.name}: from now on.`);
+    steps.push(`INSERT INTO listeners(desk, woken_for, own, round, round_at, run, by) VALUES (:desk, (
+        SELECT json_group_array(ref) FROM (SELECT 'inbox:' || id AS ref FROM (${handovers})
+          WHERE :handed IS NULL OR id IN (SELECT value FROM json_each(:handed)) UNION ALL ${dueRefs})),
+        :own, :round, :from, :run, :me)
+      ON CONFLICT(desk) DO UPDATE SET run = excluded.run, by = excluded.by`);
+  } else {
+    if (ownWas !== ownJson) {
+      if (was === source) console.error(`${desk.name}'s Mail: line changed: handovers from now on.`);
+      steps.push(`UPDATE listeners SET own = :own, woken_for = (SELECT json_group_array(ref) FROM (
+          SELECT 'inbox:' || id AS ref FROM (${handovers})
+          UNION ALL SELECT value FROM json_each(listeners.woken_for) WHERE value NOT LIKE 'inbox:%'))
+        WHERE desk = :desk AND run = :run`);
+    }
+    if (roundWas !== roundText) {
+      if (round) console.error(`${desk.name}'s Round: line changed: rounds from now on.`);
+      steps.push('UPDATE listeners SET round = :round, round_at = :from WHERE desk = :desk AND run = :run');
+    }
+  }
+  steps.push('SELECT woken_for, round_at FROM listeners WHERE desk = :desk');
+  const begun = await attempt(() => q(steps.join(';\n'), {
+    ...known, from, handed: was === source && handedOver ? handedOver : null,
+  }));
+  let [woken, roundAt] = begun.at(-1).rows[0];
+
+  // One look: new mail from the Worker (a full page may mean more), then the database, in one
+  // transaction that saves the cursor and what was announced before anything is printed, and
+  // only while this run still holds the desk. What it prints is what it saved.
+  const look = async () => {
     let next = after;
     const mail = [];
-    for (let pages = 0; pages < 100; pages++) {
+    for (let pages = 0; hasMail && pages < 100; pages++) {
       const page = await mailGet('/v1/changes', [...mailboxes, ['after', next], ['limit', '50']]);
       if (page?.cursor == null || !Array.isArray(page.messages)) throw retryable(`the mail Worker at ${host} answered without a cursor and messages`);
       mail.push(...page.messages.filter((m) => own.has(String(m?.mailbox).toLowerCase())));
@@ -809,35 +944,63 @@ async function watch(flags, deskName) {
       next = String(page.cursor);
       if (page.messages.length < 50 || !moved) break;
     }
-    const [open] = await q(`${handovers};
-      UPDATE mail_cursors SET cursor = :next, checked_at = :now, by = :me,
-        handed_over = (SELECT json_group_array(id) FROM (${handovers})) WHERE desk = :desk;`, { next, own: ownJson });
-    const seen = new Set(JSON.parse(announced));
+    const rounds = round ? roundsDue(round, roundAt && new Date(roundAt), new Date()) : { latest: null };
+    const res = await q(`
+      SELECT by FROM locks WHERE key = :key;
+      SELECT run FROM listeners WHERE desk = :desk;
+      UPDATE listeners SET woken_for = (${wokenNow}), round_at = :round_at, checked_at = :now, by = :me
+        WHERE desk = :desk AND run = :run AND ${mine};
+      ${hasMail ? `UPDATE mail_cursors SET cursor = :next, checked_at = :now, by = :me WHERE desk = :desk
+        AND EXISTS (SELECT 1 FROM listeners WHERE desk = :desk AND run = :run) AND ${mine};` : ''}
+      SELECT woken_for FROM listeners WHERE desk = :desk;
+      SELECT id, mailbox, from_addr FROM inbox WHERE desk = :desk
+        AND 'inbox:' || id IN (SELECT value FROM json_each((SELECT woken_for FROM listeners WHERE desk = :desk)))
+        ORDER BY received_at, id;`,
+    { ...known, next, round_at: rounds.latest?.toISOString() ?? roundAt });
+    const by = res[0].rows[0]?.[0];
+    if (by !== USER) return { stop: by ? `${by} took over listening to ${desk.name}: stopped.` : `nobody holds ${key} any more (it was unlocked): stopped listening.` };
+    if (res[1].rows[0]?.[0] !== run) return { stop: `a newer watch for ${desk.name} took over: this one stopped.` };
+    const seen = new Set(JSON.parse(woken));
+    [woken] = res.at(-2).rows[0];
     after = next;
-    announced = JSON.stringify(open.rows.map((r) => r[0]));
-    return { mail, handed: open.rows.filter((r) => !seen.has(r[0])) };
+    roundAt = rounds.latest?.toISOString() ?? roundAt;
+    const due = JSON.parse(woken).filter((r) => !seen.has(r)).map((r) => r.match(/^(task|check):(\d+)@(.*)$/s)).filter(Boolean)
+      .map(([, type, id, when]) => ({ type, id: Number(id), due: when }))
+      .sort((a, b) => a.due.localeCompare(b.due) || b.type.localeCompare(a.type) || a.id - b.id);
+    return { mail, handed: res.at(-1).rows.filter(([id]) => !seen.has(`inbox:${id}`)), due, rounds };
   };
 
-  const line = flags.json
-    ? (o) => JSON.stringify(o)
-    : (o) => `${o.event} ${o.id} from ${o.from} to ${o.mailbox}${o.auto ? ', automatic' : ''}`;
-  console.error(`Listening for mail to ${[...own].join(', ')} (${desk.name}): every ${ago(every)}, for up to ${ago(max)}.`);
+  const line = flags.json ? (o) => JSON.stringify(o) : (o) => {
+    if (o.event === 'round') return `round due ${o.at} (${o.round})${o.missed ? `, missed ${o.missed}` : ''}`;
+    if (o.event === 'task' || o.event === 'check') return `${o.event} ${o.id} due ${o.due}`;
+    return `${o.event} ${o.id} from ${o.from} to ${o.mailbox}${o.auto ? ', automatic' : ''}`;
+  };
+  const hears = [
+    hasMail ? `mail to ${[...own].join(', ')}` : null,
+    'tasks and checks that come due',
+    round ? `rounds (${round.text})` : null,
+  ].filter(Boolean);
+  console.error(`Listening for ${desk.name}: ${hears.join(', ')}. Looking every ${ago(every)}${max < Infinity ? `, for up to ${ago(max)}` : ''}.${hasMail ? '' : ' No Mail: line, so no mail.'}`);
   const deadline = Date.now() + max;
   for (;;) {
-    const { mail, handed } = await attempt(poll);
+    const { stop, mail, handed, due: dueNew, rounds } = await attempt(look);
+    if (stop) {
+      console.error(stop);
+      return 2;
+    }
     const events = [
-      ...mail.map((m) => {
-        return { event: 'mail', desk: desk.name, id: inboxId(m), mailbox: oneWord(m.mailbox).toLowerCase(),
-          from: address(m.from) || 'unknown', auto: m.auto === true || m.auto === 1 };
-      }),
+      ...mail.map((m) => ({ event: 'mail', desk: desk.name, id: inboxId(m), mailbox: oneWord(m.mailbox).toLowerCase(),
+        from: address(m.from) || 'unknown', auto: m.auto === true || m.auto === 1 })),
       ...handed.map(([id, mailbox, from]) => ({ event: 'handover', desk: desk.name, id: oneWord(id), mailbox: oneWord(mailbox), from: address(from) || 'unknown' })),
+      ...dueNew.map((d) => ({ event: d.type, desk: desk.name, id: d.id, due: d.due === '' ? 'now' : oneWord(d.due) })),
+      ...(rounds.latest ? [{ event: 'round', desk: desk.name, at: localStamp(rounds.latest), round: round.text, ...(rounds.count > 1 ? { missed: rounds.count } : {}) }] : []),
     ];
     if (events.length) {
       for (const e of events) console.log(line(e));
       return 0;
     }
     if (Date.now() + every > deadline) {
-      console.log(flags.json ? JSON.stringify({ event: 'quiet', desk: desk.name, waited: ago(max) }) : `no new mail for ${desk.name} in ${ago(max)}`);
+      console.log(flags.json ? JSON.stringify({ event: 'quiet', desk: desk.name, waited: ago(max) }) : `nothing new for ${desk.name} in ${ago(max)}`);
       return 0;
     }
     await sleep(every);
@@ -1207,6 +1370,9 @@ async function doctor() {
   }
 
   const desks = desksOnDisk();
+  for (const d of desks) {
+    try { roundOf(d); } catch (e) { if (e instanceof DeskError) bad(e.message); else throw e; }
+  }
   for (const [a, names] of mailClashes(desks)) bad(`${a} is in the Mail: line of ${names.join(' and ')}: an address belongs to one desk, so take it out of the others`);
   const listening = desks.filter((d) => d.mail.length);
   if (listening.length) {
