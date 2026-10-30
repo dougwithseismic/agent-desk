@@ -4,6 +4,11 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-10-30
 
+### "/desk <name> listen" is understood straight away · Fixed
+- The desk skill's description now says what listening is and lists "/desk <name> listen",
+  "listen to the <name> desk" and "stop listening", and typing `/desk` hints at
+  `[<desk>] [listen]`. Before, only the skill's body mentioned listening.
+
 ### A listening desk's chat hears its tasks and its schedule, not only mail (PRD 06) · New
 - While a chat listens to a desk ("/desk <name> listen"), it's woken when one of the
   agent's tasks or checks comes due, and at the times in the desk's new `Round:` line

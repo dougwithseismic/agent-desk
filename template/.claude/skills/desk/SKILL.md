@@ -1,6 +1,7 @@
 ---
 name: desk
-description: Work the desks in this project (desks/<name>/, such as SEO, outreach, PPC or admin) in this chat. Shows what needs attention, runs a working round, shows drafts for send/change/drop, keeps promises and follow-ups, and measures changes. Use for "/desk", "desk status", "run a round", "run the seo desk", "what's waiting for me", "what's due", "how is <desk> doing", or any work a desk in this project owns. To make a new desk, use new-desk.
+description: Work the desks in this project (desks/<name>/, such as SEO, outreach, PPC or admin) in this chat. Shows what needs attention, runs a working round, shows drafts for send/change/drop, keeps promises and follow-ups, and measures changes. Listening makes this chat the desk at work, woken by itself for the desk's mail, its due tasks and checks, and its round times. Use for "/desk", "/desk <name> listen", "listen to the <name> desk", "stop listening", "desk status", "run a round", "run the seo desk", "what's waiting for me", "what's due", "how is <desk> doing", or any work a desk in this project owns. To make a new desk, use new-desk.
+argument-hint: "[<desk>] [listen]"
 ---
 
 # Desk
@@ -28,7 +29,8 @@ When it refuses, read the message and do what it says. Never work around it.
 1. Run `node desks/desk.mjs status`. It shows, per desk, what's waiting, due, in flight, locked
    and held, who is listening, and trust. If it fails, or this machine is new, run `node desks/desk.mjs doctor`
    and fix what it says. Settings live in `desks/.env`; see `desks/.env.example`.
-2. Pick the desk: the one they named, or the only one, or ask.
+2. Pick the desk: the one they named, or the only one, or ask. If they asked it to listen
+   ("/desk <name> listen"), open it as below, then go on to "Listening".
 3. Read `desks/<name>/desk.md`: purpose, headline, what it may do, its round, criteria,
    limits, sources. It overrides anything general here. Read a playbook only when the
    next step needs it.
