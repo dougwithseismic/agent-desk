@@ -91,7 +91,8 @@ mail settings in `desks/.env`; if `watch` says one is missing, tell them what to
    read the thread (`node desks/desk.mjs mail thread <inbox id>`), record it in `inbox`,
    and prepare what's needed. Show any action waiting in full. Send with
    `node desks/desk.mjs send <action id>`: what the person approved, and drafts the
-   database lets go on their own.
+   database lets go on their own. A desk whose project runs its own mail Worker reads and
+   sends with the tool its playbooks name instead.
    A wake is not a round: no new outreach, no building, no measuring.
 4. Start `watch` again. On "no new mail", start it again without saying anything.
 5. If it fails, say what failed in one line and stop listening. If the failure is clearly

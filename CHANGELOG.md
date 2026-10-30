@@ -8,6 +8,8 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 - A project with its own mail Worker, whose desks record mail as `acme-mail:<mailbox>:<id>`,
   sets `DESK_MAIL_PREFIX=acme-mail` and `watch`, `mail` and `send` use the same word, so
   mail that arrives while a desk listens matches the rows it already has.
+- When the listener wakes such a desk, it reads and sends with the mail tool its own
+  playbooks name, so the project's Worker only needs the one route the listener uses.
 - Try it: "The contract, for a project with its own Worker" in `desks/kit/mail/README.md`.
 
 ## 2026-10-29
