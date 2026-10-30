@@ -134,7 +134,8 @@ chat stops: background or scheduled runs only when asked, as with listening.
   long text in a file and pass it with `-a body=@desks/data/<desk>/body.txt`.
 - `:me` is the person (DESK_USER), `:now` the time, `:today` the date, and `:desk` the
   desk (`--desk <name>`, or the only one). `--json` gives rows to read; `--full` shows
-  long values whole.
+  long values whole. `--expect-rows` exits 1 when the last statement gets no rows, so
+  `&&` stops whatever comes next.
 - Lock what you're working on, if anyone else might touch it (`together.md`).
 - Record as you go, never only in the chat:
 

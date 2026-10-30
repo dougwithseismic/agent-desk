@@ -340,6 +340,25 @@ test('workers racing to send the same action: exactly one sends it', async () =>
   await p.fails(claim(id, 'human', 'w9'), /already being sent/);
 });
 
+test('sql --expect-rows exits 1 when a claim gets nothing, so a send chained with && stops', async () => {
+  const p = await project();
+  const id = await create(p);
+  await p.sql(approve(id));
+  const claimIt = `UPDATE actions SET status = 'sending', mode = 'human', sent_by = :me, last_by = :me WHERE id = ${id} AND status = 'approved' RETURNING id`;
+  const first = await p.run(['sql', '--expect-rows', claimIt]);
+  assert.equal(first.code, 0, first.err);
+  const again = await p.run(['sql', '--expect-rows', claimIt]);
+  assert.equal(again.code, 1);
+  assert.match(again.out, /\(no rows\)/);
+  assert.match(again.err, /matched no rows \(--expect-rows\), so stop here/);
+  assert.equal((await p.run(['sql', claimIt])).code, 0, 'without the flag, nothing back is still exit 0');
+  // A write with no RETURNING counts its changes; a SELECT counts its rows.
+  assert.equal((await p.run(['sql', '--expect-rows', `UPDATE actions SET last_by = 'doug' WHERE id = -1`])).code, 1);
+  assert.equal((await p.run(['sql', '--expect-rows', `UPDATE actions SET last_by = 'doug' WHERE id = ${id}`])).code, 0);
+  assert.equal((await p.run(['sql', '--expect-rows', '--json', 'SELECT id FROM actions WHERE id = -1'])).code, 1);
+  assert.equal((await p.run(['sql', '--expect-rows', `SELECT 1 AS n; SELECT id FROM actions WHERE id = ${id}`])).code, 0);
+});
+
 test('two desks share one database, and a lock taken for one blocks a send from the other', async () => {
   const p = await project({ seo: {}, outreach: { headline: 'replies-week' } });
   await p.run(['lock', 'brand:acme', 'updating their store page', '--desk', 'seo'], { user: 'sam' });

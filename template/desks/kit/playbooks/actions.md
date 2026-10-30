@@ -147,7 +147,14 @@ Anything else goes step by step:
    ```
 
    No row back means it isn't yours to send: stop. A refusal (held, locked) means do what
-   it says.
+   it says. When a script does the claim and the send in one go, pass `--expect-rows`, so
+   no row back exits 1 like a refusal does and `&&` stops the send:
+
+   ```sh
+   node desks/desk.mjs sql --expect-rows "UPDATE actions SET status = 'sending', mode = 'human', sent_by = :me, last_by = :me WHERE id = 12 AND status = 'approved' RETURNING id" && <send it>
+   ```
+
+   Without the flag, no row back still exits 0.
 2. **Check again, right before.** Look for a newer reply in the thread, check the
    recipients and file hashes, and check the provider is healthy and within limits. If
    anything changed, set it back with `status = 'failed'`, `result = 'not sent: <why>'`,

@@ -4,6 +4,12 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-10-30
 
+### A claim that gets nothing now stops a send chained after it · Fixed
+- `node desks/desk.mjs sql --expect-rows "UPDATE ... RETURNING id" && <send>` exits 1 when
+  the claim gets no row back, so the send never runs. Before, "(no rows)" still exited 0,
+  and `&&` only stopped on an outright refusal.
+- `actions.md` shows the chain.
+
 ### A desk that already files its mail one way can listen without changing it · Improved
 - A project with its own mail Worker, whose desks record mail as `acme-mail:<mailbox>:<id>`,
   sets `DESK_MAIL_PREFIX=acme-mail` and `watch`, `mail` and `send` use the same word, so

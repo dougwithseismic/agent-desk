@@ -26,6 +26,8 @@
 // In SQL, :me is you (DESK_USER), :now the time, :today the date and :desk the --desk value.
 // Add your own with -a name=value, or -a name=@path to read a file, so long text needs no
 // escaping. --json prints rows as JSON; --full prints whole values, one row at a time.
+// --expect-rows exits 1 when the last statement returns or changes no rows, so a claim
+// chained to a send with && stops the send when the claim gets nothing.
 //
 // Settings come from the environment, then desks/.env, then the project's .env (DESK_* only).
 // In a git worktree, the main checkout's files fill in what the worktree's don't set, and a
@@ -409,6 +411,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--json') flags.json = true;
     else if (a === '--full') flags.full = true;
+    else if (a === '--expect-rows') flags.expectRows = true;
     else if (a === '--desk') flags.desk = argv[++i];
     else if (a === '--where') flags.where = argv[++i];
     else if (a === '--every' || a === '--max') flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a time, such as 30s or 25m`);
@@ -1311,6 +1314,10 @@ async function main() {
       const out = await execute(db, text, { ...autoParams({ desk: deskOf(flags) ?? undefined }), ...flags.values });
       db.close();
       print(out, flags);
+      const last = out.results.at(-1);
+      if (flags.expectRows && !(last?.cols.length ? last.rows.length : last?.changes)) {
+        fail('the last statement matched no rows (--expect-rows), so stop here');
+      }
       return 0;
     }
     case 'lock': return lock(flags, args[0], args.slice(1).join(' '));
