@@ -32,8 +32,8 @@ standing rules for changing the kit; this file has what was decided on top of th
   So the listener runs on the machine, beside the session.
 - One desk is one agent working, in one session. Doug: "think 1 desk is 1 agent working".
   `/desk <name> listen` is the way in, not a per-desk command (see the memory on aliases).
-- Changed on 30 Oct: desks may also run headless on Doug's Mac. See "Desks work on their
-  own" below.
+- Confirmed on 30 Oct, after a morning planning headless runs: events land in the desk's
+  chat in the app. See "Desks work in their own chat" below.
 - A desk reads only the addresses it owns, and never the person's own inbox. The live desks
   read Doug's Gmail, where desk aliases forward, and he agreed that's wrong ("which is weird
   right?").
@@ -44,26 +44,26 @@ standing rules for changing the kit; this file has what was decided on top of th
 - The kit ships the mail Worker (Doug: "Kit ships it"). There's one per project, shared by
   the project's desks, the same line the database draws.
 
-## Desks work on their own (2026-10-30)
+## Desks work in their own chat (2026-10-30)
 
 Doug: "the agent desk should be something we can command, 'Hey, go install this', and have
 it execute automatically", extensible because "we may also have an SEO desk", on "the best
 possible infrastructure".
 
-- **Engine: headless Claude Code on Doug's Mac**, on his own login (his choice over Managed
-  Agents and over staying app-only). A no-model runner watches each desk for mail, due
-  tasks and schedules, and starts a headless run for the desk that woke. Desks stop while
-  the Mac sleeps or is off; that's accepted. Managed Agents stays in the parking lot for a
-  desk that must run with the Mac off.
-- **One desk is still one agent.** Each wake is a fresh run for that desk, under the lock
-  `run:<desk>`, so the runner and a listening app session never answer the same mail. The
-  database is the desk's memory between runs, not a long chat.
-- **A headless run gets the desk's tools and nothing else.** Anything it isn't allowed to do
-  becomes a task for the person. Approvals don't change: an action that needs a person
-  waits in the database, and the person clears it in the app with `/desk`.
+- **Engine: the desk's own chat in the Claude Code app.** Doug first picked headless runs
+  on his Mac, then changed his mind the same morning: "our Claude Code desktop chat should
+  be receiving these", and "today a chat listens - thats probably the right one honestly".
+  `watch` wakes the desk's chat when there's something to do. There's no headless runner.
+  A desk stops while the app is closed or the Mac sleeps. Its mail waits in the Worker, and
+  the chat catches up when it listens again. Managed Agents stays in the parking lot for a
+  desk that must work with the Mac off.
+- **One desk is one agent, in one chat** that holds `listen:<desk>`. The database is the
+  desk's memory, so nothing that matters is lost when the chat compacts.
+- **Approvals don't change.** An action that needs a person waits in the database, and the
+  person clears it with `/desk`, in the desk's chat or any other.
 - **The desk's tools are typed.** `desk.mjs` serves its commands as tools as well as on the
-  command line, so permissions go by tool name rather than shell patterns, and every way of
-  running a desk uses the same ones.
+  command line, so a desk's chat can be allowed its tools by name rather than by shell
+  pattern.
 - **Install is one command, with one yes per project.** Once Doug approves a desk for a
   project, the install sets up its mail (Cloudflare) and its database (Railway) without
   asking at each step, and records his yes with the date. Anything that costs money still

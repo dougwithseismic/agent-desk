@@ -32,27 +32,29 @@ What "desks answer mail as it arrives" needs before it's finished:
 - [x] (merged 2026-10-29; `pnpm e2e` runs it against the real Worker under `wrangler dev`) **PRD 05** Installing the mail Worker, and the end-to-end check
       (`docs/prds/05-install.md`). Needs 02, 03, 04.
 
-## Wave 2: desks that work on their own
+## Wave 2: desks that work in their own chat
 
-Decided 30 Oct (`docs/DECISIONS.md`, "Desks work on their own"). PRDs get written when
+Decided 30 Oct (`docs/DECISIONS.md`, "Desks work in their own chat"). PRDs get written when
 they're claimed.
 
-- [ ] **PRD 06** Desk tools. `desk.mjs` serves typed tools over MCP (no dependencies):
+- [ ] **PRD 06** The desk's chat hears everything. `watch` wakes the chat for tasks that
+      come due and for the desk's schedule as well as for mail, with one line saying why.
+      A quiet spell doesn't wake the chat just to start listening again (today that's
+      every 25 minutes). `/desk` says which desks are listening, and a desk that was
+      closed catches up when it listens again. Needs nothing else.
+- [ ] **PRD 07** Desk tools. `desk.mjs` serves typed tools over MCP (no dependencies):
       status, inbox, read, claim, send, a batch send under a lock, record, lock and unlock.
       A claim that gets nothing is an error, a Worker timeout is retried once and then
       reported, and two sessions can't line up the same batch.
-- [ ] **PRD 07** Desk types. Outreach and SEO as templates (plan, playbooks, tables, the
+- [ ] **PRD 08** Desk types. Outreach and SEO as templates (plan, playbooks, tables, the
       tools and settings each needs, and what wakes it). `new-desk` starts from one.
-      Needs 06 for the tools a type adds.
-- [ ] **PRD 08** The kit as a Claude Code plugin, and one-command install. Every project
+      Needs 06, and 07 for the tools a type adds.
+- [ ] **PRD 09** The kit as a Claude Code plugin, and one-command install. Every project
       uses the same kit version. The install goes end to end with one yes per project
-      and records it; `AGENTS.md` and `new-desk` change to match. Needs 06.
-- [ ] **PRD 09** The runner. A no-model process wakes a desk on mail, due tasks or its
-      schedule and starts a headless Claude Code run with only the desk's tools, under
-      `run:<desk>`. It keeps running across restarts on the Mac and logs every run.
-      Needs 06 and 08.
+      and records it; `AGENTS.md` and `new-desk` change to match. Needs 07.
 - [ ] **PRD 10** The first real desk on it: a live outreach desk moves onto the kit's
-      tools and runner, and off its own scripts. Needs 06-09 and that project's yes.
+      tools and a listening chat, and off its own scripts. Needs 06-09 and that
+      project's yes.
 
 ## Needs you
 
@@ -69,8 +71,10 @@ they're claimed.
   with Node's built-in WebSocket. Same output, no 30-second delay.
 - Gmail API send for alias first touches from `desk.mjs send`, so cold mail needs no
   separate script.
-- Managed Agents as a second engine for the runner, for a desk that must work with the Mac
-  off (worker and hosted database on a server, billed per token).
+- Managed Agents, for a desk that must work with the Mac off (worker and hosted database
+  on a server, billed per token).
+- A headless runner (`claude -p` started by a no-model watcher), for a desk no chat is
+  listening to. Planned on 30 Oct and dropped the same morning in favour of the chat.
 - The mail Worker keeps attachments (R2), with `desk.mjs mail attachment <id>`.
 - How first emails to new contacts go out: the Gmail alias with a BCC to the desk, or a
   separate sending service.
