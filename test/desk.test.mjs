@@ -73,6 +73,7 @@ async function project(desks = { seo: {} }, { init: initNow = true } = {}) {
     if (d.mail) head.push(`Mail: ${d.mail}`);
     if (d.round) head.push(`Round: ${d.round}`);
     if (d.agent) head.push(`Agent: ${d.agent}`);
+    if (d.type) head.push(`Type: ${d.type}`);
     fs.writeFileSync(path.join(dir, 'desks', name, 'desk.md'), `${head.join('\n')}\n\n## Purpose\nTesting.\n`);
     if (d.schema) fs.writeFileSync(path.join(dir, 'desks', name, 'schema.sql'), d.schema);
   }
@@ -157,7 +158,7 @@ test('init is safe to repeat and sets up the core and each desk', async () => {
   assert.equal(again.code, 0, again.err);
   assert.match(again.out, /Desks: seo\./);
   const names = (await p.sql('SELECT name FROM migrations ORDER BY name')).map((r) => r.name);
-  assert.deepEqual(names, ['core/001-trust-by.sql', 'core/core.sql', 'seo/schema.sql']);
+  assert.deepEqual(names, ['core/001-trust-by.sql', 'core/002-desk-type.sql', 'core/core.sql', 'seo/schema.sql']);
   assert.deepEqual(await p.sql("INSERT INTO seo_pages VALUES ('/x', 3); SELECT * FROM seo_pages"), [{ path: '/x', clicks: 3 }]);
   const desk = await p.one('SELECT * FROM desks');
   assert.equal(desk.headline, 'clicks-7d');
@@ -1902,4 +1903,61 @@ test('a missing, mistyped or refused Stripe key is named by stripe and doctor, n
   const good = await p.run(['doctor'], { env: s.env });
   assert.match(good.out, /ok +Stripe reads in test mode/);
   assert.deepEqual(s.requests.at(-1), { method: 'GET', name: 'balance_transactions', query: { limit: '1' } });
+});
+
+// ---------- the GM: it briefs, the desks do ----------
+
+const desksForGm = { gm: { agent: 'gm', type: 'gm' }, partners: {} };
+const initiative = (o = {}) => ({ desk: 'gm', kind: 'initiative', channel: 'gm', identity: 'gm', about: 'bet:affiliates',
+  target: 'bet:affiliates', title: 'Start an affiliate program', body: 'Partners send a third of trials; pay them for it.', by: 'gm', ...o });
+
+test('a GM desk briefs and proposes, and only a person starts an initiative', async () => {
+  const p = await project(desksForGm);
+  assert.equal((await p.one("SELECT type FROM desks WHERE name = 'gm'")).type, 'gm');
+  for (const by of ['gm', 'doug']) {
+    await p.fails(newAction({ desk: 'gm', identity: 'gm', by }), /a GM briefs, it doesn't do: brief the desk that owns this work/);
+  }
+  await p.fails(newAction({ desk: 'partners', by: 'gm' }), /an agent prepares actions on its own desk, and gives another desk work with a brief/);
+  assert.ok(await create(p, { desk: 'partners' }), 'the person still works any desk without an agent');
+  assert.ok(await create(p, briefAction({ by: 'gm' })));
+
+  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coached, clean, trusted, last_by, note)
+      VALUES ('gm', 'initiative', 'gm', 'gm', 2, 5, 1, 'doug', 'start what you like');
+    INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('gm', 'initiative', 'gm', 'gm', 'go ahead', 'doug')`);
+  const alone = await create(p, initiative({ status: 'draft' }));
+  await p.fails(claim(alone, 'auto', 'gm'), /an initiative always waits for the person: show it and ask/);
+  const shown = await create(p, initiative({ status: 'waiting' }));
+  await p.sql(`${approve(shown)}\n${claim(shown, 'human', 'gm')}`);
+  assert.equal((await p.one(`SELECT status FROM actions WHERE id = ${shown}`)).status, 'sending');
+});
+
+test('a desk\'s type comes from its Type: line, and doctor says when init hasn\'t recorded it', async () => {
+  const p = await project(desksForGm);
+  const md = path.join(p.dir, 'desks/gm/desk.md');
+  const text = fs.readFileSync(md, 'utf8');
+  fs.writeFileSync(md, text.replace('Type: gm\n', ''));
+  assert.match((await p.run(['doctor'])).out, /gm: Type: \(none\) is not in the database yet: run init/);
+  assert.equal((await p.run(['init'])).code, 0);
+  assert.ok(await create(p, { desk: 'gm', identity: 'gm' }), 'no longer a GM, so it can send mail');
+  fs.writeFileSync(md, text);
+  assert.match((await p.run(['doctor'])).out, /gm: Type: gm is not in the database yet: run init/);
+  assert.equal((await p.run(['init'])).code, 0);
+  await p.fails(newAction({ desk: 'gm', identity: 'gm' }), /a GM briefs/);
+
+  fs.writeFileSync(md, text.replace('Type: gm', 'Type: general manager'));
+  const bad = await p.run(['init']);
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /desks\/gm\/desk.md: Type: general manager is not a type: use one word, such as gm/);
+});
+
+test('a database from before migration 002 gets desk types once', async () => {
+  const p = await project(desksForGm);
+  await p.sql(`DROP TRIGGER gm_briefs_only; ALTER TABLE desks DROP COLUMN type;
+    DELETE FROM migrations WHERE name = 'core/002-desk-type.sql'`);
+  assert.match((await p.run(['doctor'])).out, /core migration 002-desk-type.sql not applied/);
+  const first = await p.run(['init']);
+  assert.match(first.out, /Applied: core\/002-desk-type.sql\./);
+  assert.doesNotMatch((await p.run(['init'])).out, /Applied/);
+  assert.equal((await p.one("SELECT type FROM desks WHERE name = 'gm'")).type, 'gm');
+  await p.fails(newAction({ desk: 'gm', identity: 'gm' }), /a GM briefs/);
 });

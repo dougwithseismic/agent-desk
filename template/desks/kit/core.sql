@@ -878,6 +878,24 @@ CREATE TRIGGER task_agent_desk BEFORE INSERT ON tasks
 WHEN coalesce(NEW.source, '') NOT LIKE 'brief:%' AND NEW.created_by IN (SELECT name FROM agents)
   AND NOT EXISTS (SELECT 1 FROM agents WHERE name = NEW.created_by AND desk = NEW.desk)
 BEGIN SELECT RAISE(ABORT, 'an agent gives another desk work with a brief, not a task: kit/playbooks/briefs.md'); END;
+DROP TRIGGER IF EXISTS action_agent_desk;
+CREATE TRIGGER action_agent_desk BEFORE INSERT ON actions
+WHEN NEW.created_by IN (SELECT name FROM agents)
+  AND NOT EXISTS (SELECT 1 FROM agents WHERE name = NEW.created_by AND desk = NEW.desk)
+BEGIN SELECT RAISE(ABORT, 'an agent prepares actions on its own desk, and gives another desk work with a brief: kit/playbooks/briefs.md'); END;
+
+-- A GM runs the other desks by briefing them (kit/types/gm). A desk whose desk.md says
+-- Type: gm (desks.type, recorded by init) prepares briefs (channel desk) and initiatives
+-- (channel gm), nothing else. Left to judge, a model does "small" work itself; this keeps it
+-- with the desk that owns it. An initiative always waits for the person.
+DROP TRIGGER IF EXISTS gm_briefs_only;
+CREATE TRIGGER gm_briefs_only BEFORE INSERT ON actions
+WHEN NEW.channel NOT IN ('desk', 'gm') AND EXISTS (SELECT 1 FROM desks WHERE name = NEW.desk AND type = 'gm')
+BEGIN SELECT RAISE(ABORT, 'a GM briefs, it doesn''t do: brief the desk that owns this work (channel desk), or propose an initiative (channel gm)'); END;
+DROP TRIGGER IF EXISTS initiative_waits;
+CREATE TRIGGER initiative_waits BEFORE UPDATE OF status ON actions
+WHEN NEW.status = 'sending' AND NEW.mode IS 'auto' AND OLD.channel = 'gm'
+BEGIN SELECT RAISE(ABORT, 'an initiative always waits for the person: show it and ask'); END;
 DROP TRIGGER IF EXISTS task_stays;
 CREATE TRIGGER task_stays BEFORE UPDATE OF desk ON tasks WHEN NEW.desk IS NOT OLD.desk
 BEGIN SELECT RAISE(ABORT, 'a task stays on its desk: drop it here and brief the other desk'); END;

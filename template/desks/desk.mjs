@@ -463,7 +463,8 @@ function sha(text) {
 // A desk is a folder in desks/ with a desk.md. Its header lines before the first ##
 // can say Headline:, Target:, Needs: (env var names, comma separated), Mail: (the
 // addresses the desk answers, comma separated), Round: (when its rounds are due, such as
-// weekdays 09:00) and Agent: (the name its agent works under).
+// weekdays 09:00), Agent: (the name its agent works under) and Type: (the kind of desk it
+// started as, from kit/types/: a gm desk only briefs).
 function desksOnDisk() {
   return fs.readdirSync(DESKS, { withFileTypes: true })
     .filter((d) => d.isDirectory() && fs.existsSync(path.join(DESKS, d.name, 'desk.md')))
@@ -482,11 +483,12 @@ function desksOnDisk() {
         mail: [...new Set((field('Mail') || '').toLowerCase().split(/[,\s]+/).filter((x) => /^[^@<>]+@[^@<>]+\.[^@<>]+$/.test(x)))],
         round: field('Round'),
         agent: field('Agent')?.toLowerCase(),
+        type: field('Type')?.toLowerCase(),
       };
     })
-    .map((d) => ({ ...d, agentFault: !d.agent ? null
-      : !isWord(d.agent) ? `desks/${d.name}/desk.md: Agent: ${d.agent} is not a name: use letters, digits and dashes, such as gm`
-        : isPerson(d.agent) ? `desks/${d.name}/desk.md: Agent: ${d.agent} is you (DESK_USER): the database can't tell your say-so from its work, so give the agent a name of its own`
+    .map((d) => ({ ...d, fault: d.agent && !isWord(d.agent) ? `desks/${d.name}/desk.md: Agent: ${d.agent} is not a name: use letters, digits and dashes, such as gm`
+      : d.agent && isPerson(d.agent) ? `desks/${d.name}/desk.md: Agent: ${d.agent} is you (DESK_USER): the database can't tell your say-so from its work, so give the agent a name of its own`
+        : d.type && !isWord(d.type) ? `desks/${d.name}/desk.md: Type: ${d.type} is not a type: use one word, such as gm`
           : null }));
 }
 
@@ -521,7 +523,7 @@ export function ensureGitignore(desks = DESKS) {
 
 async function init(flags) {
   const disk = desksOnDisk();
-  for (const d of disk) if (d.agentFault) fail(d.agentFault);
+  for (const d of disk) if (d.fault) fail(d.fault);
   ensureGitignore();
   const db = await open();
   const me = USER || 'setup';
@@ -539,10 +541,10 @@ async function init(flags) {
     done.push(`core/${f}`);
   }
   for (const desk of disk) {
-    await execute(db, `INSERT INTO desks(name, title, headline, target) VALUES (:name, :title, :headline, :target)
-      ON CONFLICT(name) DO UPDATE SET title = excluded.title, headline = excluded.headline, target = excluded.target;
+    await execute(db, `INSERT INTO desks(name, title, headline, target, type) VALUES (:name, :title, :headline, :target, :type)
+      ON CONFLICT(name) DO UPDATE SET title = excluded.title, headline = excluded.headline, target = excluded.target, type = excluded.type;
       ${desk.agent ? 'INSERT INTO agents(name, desk, for_whom) VALUES (:agent, :name, :whom) ON CONFLICT DO NOTHING;' : ''}`,
-    { name: desk.name, title: desk.title, headline: desk.headline ?? null, target: desk.target ?? null,
+    { name: desk.name, title: desk.title, headline: desk.headline ?? null, target: desk.target ?? null, type: desk.type ?? null,
       ...(desk.agent && { agent: desk.agent, whom: PERSON || 'setup' }) });
     const schemaFile = path.join(desk.dir, 'schema.sql');
     if (fs.existsSync(schemaFile)) {
@@ -1415,7 +1417,7 @@ async function doctor() {
   }
   PERSON ? ok(`you are ${PERSON}`) : bad('DESK_USER is not set: put DESK_USER=<your name> in desks/.env');
   const disk = desksOnDisk();
-  for (const d of disk) if (d.agentFault) bad(d.agentFault);
+  for (const d of disk) if (d.fault) bad(d.fault);
   if (HOSTED && !TOKEN) bad('DESK_DB_TOKEN is not set: a hosted database needs its token in desks/.env');
 
   let db;
@@ -1451,12 +1453,15 @@ async function doctor() {
       for (const f of migrationFiles(path.join(KIT, 'migrations'))) {
         if (!applied.has(`core/${f}`)) bad(`core migration ${f} not applied: run node desks/desk.mjs init`);
       }
+      let types = new Map();
+      try { types = new Map((await execute(db, 'SELECT name, type FROM desks')).results[0].rows); } catch {}
       const known = new Set((await execute(db, 'SELECT name FROM desks')).results[0].rows.map((r) => r[0]));
       let agents = new Set();
       try { agents = new Set((await execute(db, "SELECT name || '/' || desk FROM agents")).results[0].rows.map((r) => r[0])); } catch {}
       for (const desk of disk) {
         if (!known.has(desk.name)) { bad(`${desk.name}: not in the database yet: run init`); continue; }
         if (desk.agent && !agents.has(`${desk.agent}/${desk.name}`)) bad(`${desk.name}: Agent: ${desk.agent} is not in the database yet: run init`);
+        if (types.size && (types.get(desk.name) ?? null) !== (desk.type ?? null)) bad(`${desk.name}: Type: ${desk.type ?? '(none)'} is not in the database yet: run init`);
         const schemaFile = path.join(desk.dir, 'schema.sql');
         if (fs.existsSync(schemaFile) && applied.get(`${desk.name}/schema.sql`) !== sha(fs.readFileSync(schemaFile, 'utf8'))) {
           bad(`${desk.name}: schema.sql changed since the last init: run init (a changed column needs a file in ${desk.name}/migrations/)`);
