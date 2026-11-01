@@ -126,6 +126,9 @@ Set it up in the same conversation, one thing at a time:
   the docs, where analytics and sign-ups are read. Leave a blank where you can't find a
   source, and say so.
 
+- **Sessions**, if they'd like the GM to start desks: ask, and with their yes set up the
+  tasks by `playbooks/sessions.md`. Without it, the GM asks them to open desks instead.
+
 Then `init`, `doctor`, and one round with them (`playbooks/round.md`), ending with their
 first brief. Its questions are how you check the mandate is right.
 

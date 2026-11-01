@@ -22,14 +22,12 @@ source is down, that number is missing today. Never fill it in.
 node desks/desk.mjs --as gm status --json
 ```
 
-For each desk in `mandate.md`, read its `board` row (headline against target, waiting, due,
-in flight, uncertain), who is `listening`, its open `briefs` and its `holds`. Note what's
-stuck:
+Read the `watchdog` first: each row is something stalled, with what fixes it. Start the desks
+nobody is listening to, and handle the rest, by `sessions.md`.
 
-- actions waiting for the person for more than two days;
-- a desk with `due` or `waiting` above zero and nobody in `listening`;
-- anything `uncertain`, or in `in_flight` for more than a few minutes;
-- briefs whose `oldest_days` is past a week.
+Then, for each desk in `mandate.md`, read its `board` row (headline against target, waiting,
+due, in flight, uncertain), its open `briefs` and its `holds`. Note actions waiting for the
+person for more than two days.
 
 Don't fix another desk's work yourself. Something stuck becomes a line in the brief, a brief to
 that desk, or a question for the person.

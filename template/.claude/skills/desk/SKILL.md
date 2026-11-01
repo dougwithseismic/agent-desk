@@ -34,7 +34,8 @@ When it refuses, read the message and do what it says. Never work around it.
 ## Open
 
 1. Run `node desks/desk.mjs status`. It shows, per desk, what's waiting, due, in flight, locked
-   and held, who is listening, and trust. If it fails, or this machine is new, run `node desks/desk.mjs doctor`
+   and held, who is listening, and trust, and what's stalled (the watchdog, with what fixes
+   each). If it fails, or this machine is new, run `node desks/desk.mjs doctor`
    and fix what it says. Settings live in `desks/.env`; see `desks/.env.example`.
 2. Pick the desk: the one they named, or the only one, or ask. If they asked it to listen
    ("/desk <name> listen"), open it as below, then go on to "Listening".
@@ -64,8 +65,8 @@ When it refuses, read the message and do what it says. Never work around it.
 | `hosting.md` | Sharing the database between people or machines, tokens, backups |
 
 A desk's own `playbooks/` folder, if it has one, covers what it does differently. A GM
-desk's playbooks (`desks/gm/playbooks/`) are its round, its decisions, the person's brief
-and initiatives.
+desk's playbooks (`desks/gm/playbooks/`) are its round, its decisions, the person's brief,
+initiatives, and starting desks (`sessions.md`).
 
 ## The round
 
@@ -100,8 +101,11 @@ gives (`Round: weekdays 09:00`). Mail needs a `Mail:` line in `desk.md` and the 
 settings in `desks/.env`; a desk without one listens for the rest. If `watch` says something
 is missing or can't be read, tell them what to add.
 
-1. Open the desk as above, and do what's already waiting and due (the round's inbox and due
-   steps). The first time a desk listens, `watch` starts from now and leaves those to you.
+1. If `status` shows someone listening to the desk who looked in the last 15 minutes, say so
+   in one line and stop, without taking over: that chat is the desk. This matters most in a
+   session a scheduled task started, where nobody is watching. Otherwise open the desk as
+   above, and do what's already waiting and due (the round's inbox and due steps). The first
+   time a desk listens, `watch` starts from now and leaves those to you.
 2. Start `node desks/desk.mjs watch <name>` as a background command. Say in one line that
    you're listening, and for what. It runs no model while it waits, however long that is,
    and its exit wakes you.

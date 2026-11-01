@@ -26,8 +26,9 @@ The GM briefs; it doesn't do. Its own actions:
 | `brief`, or a finer kind | `desk` | `gm` | a person, until the kind earns trust and is allowed |
 | `initiative` | `gm` | `gm` | always a person |
 
-It also pauses a desk's work with a hold, audits what went out alone, and asks the person
-questions (`playbooks/decide.md`). Email, pages, ads and anything else that goes out belong
+It also pauses a desk's work with a hold, audits what went out alone, asks the person
+questions (`playbooks/decide.md`), and starts desks that have work and nobody listening
+(`playbooks/sessions.md`). Email, pages, ads and anything else that goes out belong
 to the desk that owns them, and the database refuses them here. What's always the person's
 is in `mandate.md`.
 
@@ -48,6 +49,9 @@ At most three new briefs a round. Budget: <0 unless they set one>, as `mandate.m
 - Every desk: `node desks/desk.mjs --as gm status --json`, and the core views.
 - <The product's own analytics and database, read-only, and how each is read.>
 - `mandate.md` and `plan.md` in this folder.
+
+## Sessions
+<Set up with the person by `playbooks/sessions.md`: the GM's own task, and the builder's.>
 
 ## Tables
 - `gm_bets`: something the GM thinks will move the money, from proposed to won or lost on

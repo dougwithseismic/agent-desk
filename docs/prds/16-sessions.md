@@ -75,4 +75,50 @@ headline nobody measured. Nothing looks for those unless a person does.
 
 ## Implementation Notes
 
-(Filled in after it ships.)
+Built 1 Nov 2026 in the kit: tasks 1 to 3. Task 4, trying it live in a project, waits for the
+person's yes to create scheduled tasks there.
+
+- **`unheard`** (core view): desks nobody is listening to, meaning no `listen:` lock, or a listener
+  that hasn't looked for 15 minutes (the same rule `status` already used). Its `fix` says to start
+  the desk, or, when a log note about `desk:<name>` with ref `scheduled-task:<id>` is less than
+  an hour old, to ask the person instead (AC 2).
+- **`watchdog`** (core view): one row per problem, with `desk`, `problem`, `about`, `what`, `since`
+  and `fix`. A row goes away once its problem is fixed. The rows:
+  - `nobody listening`: due work owned by the agent (what `watch` wakes for), on an unheard desk;
+  - `brief overdue`: an open brief past its `due`, or open over 7 days with no due date;
+  - `stuck sending` after 15 minutes and `uncertain` after an hour, both timed from `updated_at`;
+  - `audit overdue`: `audit_due` rows sent more than 7 days ago;
+  - `headline stale`: not measured for 7 days, or never measured on a desk older than that;
+  - `check overdue`: past its `check_at`. On the day itself it's due, not late.
+- **Rounds.** SQL can't read `Round:` lines, so `status` works out each desk's latest scheduled
+  round and adds a `nobody listening` row when it came after the desk was last looked at (or after
+  the desk was made). It skips desks that already have a row for due work.
+- **`Start: scheduled-task <task id>`** in `desk.md`. `desksOnDisk` reads it, and init stops on
+  anything else. `status` shows it on the desk's line, and `--json` adds `start` to each board row.
+- **`status`** gets a "Stalled" section and a `watchdog` key in `--json`.
+- **Playbooks**:
+  - `kit/types/gm/playbooks/sessions.md` covers setting up the tasks with the person
+    (`create_scheduled_task` with no schedule makes an on-demand task), the permission modes in
+    plain words, the start rule with its log note, refused starts, and what happens without the app.
+  - The round reads the watchdog first, and the person's brief gains "Started" and "Stuck" lines.
+  - The desk skill now stops a listen when another chat looked in the last 15 minutes (AC 4).
+  - `new-desk` offers the tasks during GM setup.
+- **Tests**:
+  - one per row type, each checking the row goes once fixed;
+  - the 15-minute rule, and the start-in-the-last-hour fix (run from `sessions.md`'s own SQL);
+  - `status` with a missed round and a `Start:` line;
+  - the `Start:` fault.
+
+  18 one-change mutations, all caught.
+- **Open:**
+  - Not tried live (task 4). Two things to record then: what `run_scheduled_task` does when the
+    app is busy, and whether an auto-mode task stalls on its first tool approval.
+  - A listening chat busy for more than 15 minutes on a long round doesn't update its listener,
+    so it reads as nobody listening. A start then is refused if the task is already running,
+    and the new session stops when it sees the listener in `status`. It still costs a session,
+    though. A heartbeat from the chat during long work would fix it.
+  - Rounds are worked out on the machine running `status`, using its clock. On a shared database
+    with people in different time zones, that can differ from the listener's clock.
+  - `audit overdue` only covers `audit_due`'s 14 days, so after that an unaudited send leaves the
+    watchdog.
+  - Hosted libSQL tests not run (no test database here).

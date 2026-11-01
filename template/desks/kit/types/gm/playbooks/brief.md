@@ -16,7 +16,8 @@ Desks
 Went out alone: <n> since last time, <n> audited: <each fail or unsure, a line each>
 Paused: <holds the GM placed, with why>
 Briefs closed: <title> → <result>, a line each
-Stuck: <a desk with work and nobody listening, things waiting for days, uncertain sends>
+Started: <desks the GM started, and why>
+Stuck: <the watchdog's rows the GM couldn't fix, and things waiting for you for days>
 
 Questions
   1. <question>? Yes: <what happens>. No: <what happens>. I'd say yes: <why, in a line>.

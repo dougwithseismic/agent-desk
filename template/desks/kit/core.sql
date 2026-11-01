@@ -498,6 +498,65 @@ CREATE VIEW audited_work AS
   UNION ALL SELECT 'measure:' || id, id, desk, by FROM measures
   UNION ALL SELECT 'task:' || id, id, desk, created_by FROM tasks;
 
+-- Desks nobody is listening to: no listener, or one that hasn't looked for 15 minutes. fix
+-- says what to do: start the desk, or, if the GM started it in the last hour (a log note about
+-- desk:<name> with ref scheduled-task:<id>) and it still isn't listening, ask the person.
+DROP VIEW IF EXISTS watchdog;
+DROP VIEW IF EXISTS unheard;
+CREATE VIEW unheard AS
+  SELECT d.name AS desk, d.created_at, l.by, l.looked_at, s.at AS started_at,
+    CASE WHEN s.at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hour')
+      THEN 'started at ' || s.at || ' and still not listening: ask the person to open it (/desk ' || d.name || ' listen)'
+      ELSE 'start it with its Start: task, or ask the person to open it (/desk ' || d.name || ' listen)' END AS fix
+  FROM desks d
+  LEFT JOIN listening l ON l.desk = d.name
+  LEFT JOIN (SELECT about, max(at) AS at FROM log WHERE kind = 'note' AND ref GLOB 'scheduled-task:*' GROUP BY about) s
+    ON s.about = 'desk:' || d.name
+  WHERE NOT coalesce(l.by IS NOT NULL AND l.looked_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-15 minutes'), 0);
+
+-- What's stalled, one row per problem: the desk, what's wrong, since when, and what fixes it.
+-- A row goes once its problem is fixed. The GM's round reads it first, and status shows it,
+-- adding a round that came due with nobody listening (it reads the Round: lines).
+CREATE VIEW watchdog AS
+  SELECT u.desk, 'nobody listening' AS problem, 'desk:' || u.desk AS about,
+    w.n || ' due for its agent, and nobody listening' AS what, coalesce(u.looked_at, w.since) AS since, u.fix
+  FROM unheard u
+  JOIN (SELECT desk, count(*) AS n, min(due) AS since FROM due WHERE owner = 'agent' GROUP BY desk) w
+    ON w.desk = u.desk
+  UNION ALL
+  SELECT b.to_desk, 'brief overdue', 'brief:' || b.action_id,
+    'brief #' || b.action_id || ' from ' || b.from_desk || ' (' || b.title || ') is still open'
+      || CASE WHEN b.due IS NOT NULL THEN ', due ' || b.due ELSE ' after ' || cast(b.days AS INTEGER) || ' days' END,
+    coalesce(b.due, b.created_at),
+    'ask ' || b.to_desk || ' where it stands, then brief again or drop it'
+  FROM briefs b
+  WHERE b.task_status = 'open' AND (b.due < date('now') OR (b.due IS NULL AND b.days > 7))
+  UNION ALL
+  SELECT a.desk, CASE a.status WHEN 'sending' THEN 'stuck sending' ELSE 'uncertain' END, 'action:' || a.id,
+    '#' || a.id || ' (' || a.kind || ') has been ' || a.status || ' since ' || a.updated_at, a.updated_at,
+    'check the provider for what happened, then settle it; never send it again blind (kit/playbooks/actions.md)'
+  FROM actions a
+  WHERE (a.status = 'sending' AND a.updated_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-15 minutes'))
+     OR (a.status = 'uncertain' AND a.updated_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hour'))
+  UNION ALL
+  SELECT w.desk, 'audit overdue', 'action:' || w.id,
+    '#' || w.id || ' (' || w.kind || ') went out alone ' || w.sent_at || ' and nobody has audited it', w.sent_at,
+    'audit it, as someone who didn''t send it (kit/playbooks/audits.md)'
+  FROM audit_due w
+  WHERE w.sent_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')
+  UNION ALL
+  SELECT d.name, 'headline stale', 'headline:' || d.headline,
+    d.headline || CASE WHEN h.observed_at IS NULL THEN ' has never been measured' ELSE ' was last measured ' || h.observed_at END,
+    coalesce(h.observed_at, d.created_at),
+    'measure ' || d.headline || ' from its source and record it in measures'
+  FROM desks d LEFT JOIN headline h ON h.desk = d.name AND h.name = d.headline
+  WHERE d.headline IS NOT NULL AND coalesce(h.observed_at, d.created_at) < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')
+  UNION ALL
+  SELECT c.desk, 'check overdue', 'check:' || c.id, 'check #' || c.id || ' on ' || c.metric || ' was due ' || c.check_at,
+    c.check_at, 'measure it the way its baseline was taken (kit/playbooks/changes.md)'
+  FROM checks c
+  WHERE c.measured_at IS NULL AND c.check_at < date('now');
+
 -- The log never changes.
 DROP TRIGGER IF EXISTS log_no_update;
 CREATE TRIGGER log_no_update BEFORE UPDATE ON log

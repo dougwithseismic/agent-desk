@@ -74,6 +74,7 @@ async function project(desks = { seo: {} }, { init: initNow = true } = {}) {
     if (d.round) head.push(`Round: ${d.round}`);
     if (d.agent) head.push(`Agent: ${d.agent}`);
     if (d.type) head.push(`Type: ${d.type}`);
+    if (d.start) head.push(`Start: ${d.start}`);
     fs.writeFileSync(path.join(dir, 'desks', name, 'desk.md'), `${head.join('\n')}\n\n## Purpose\nTesting.\n`);
     if (d.schema) fs.writeFileSync(path.join(dir, 'desks', name, 'schema.sql'), d.schema);
   }
@@ -2003,7 +2004,7 @@ async function gmProject() {
   return p;
 }
 // The SQL examples in each of the GM's playbooks, in order, so the tests run what the agent reads.
-const gmSql = Object.fromEntries(['round.md', 'decide.md', 'brief.md', 'initiatives.md'].map((file) => [file,
+const gmSql = Object.fromEntries(['round.md', 'decide.md', 'brief.md', 'initiatives.md', 'sessions.md'].map((file) => [file,
   [...fs.readFileSync(path.join(KIT, 'kit/types/gm/playbooks', file), 'utf8').matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1])]));
 // A check with its baseline, and a question for the person, as the GM writes them.
 const gmCheck = async (p, baseline, about = 'bet:x') => (await p.one(`INSERT INTO checks(desk, about, metric, baseline, check_at, created_by)
@@ -2167,4 +2168,130 @@ test('a question for the person closes only once their own words are in the log'
   await p.sql(`UPDATE tasks SET status = 'dropped', result = 'the launch moved to spring' WHERE id = ${second}`, gm);
   const other = (await p.one("INSERT INTO tasks(desk, what, created_by) VALUES ('gm', 'read the funnel', :me) RETURNING id", gm)).id;
   await p.sql(close(other), gm);
+});
+
+// ---------- the watchdog: stalled work, and starting desks ----------
+
+const minutesAgo = (n) => new Date(Date.now() - n * 60000).toISOString();
+const daysFromNow = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+const stalled = async (p, problem) => p.sql(`SELECT desk, about, what, fix FROM watchdog WHERE problem = ${q(problem)} ORDER BY desk, about`);
+
+test('the watchdog says when a desk has work for its agent and nobody listening, and what to do', async () => {
+  const p = await project({ gm: {}, partners: {}, seo: {} });
+  await p.sql(`INSERT INTO tasks(desk, what, created_by) VALUES ('partners', 'answer Jo at Acme', 'doug');
+    INSERT INTO tasks(desk, what, owner, created_by) VALUES ('seo', 'call the printer', 'doug', 'doug');
+    INSERT INTO tasks(desk, what, due, created_by) VALUES ('seo', 'refresh the titles', ${q(daysFromNow(3))}, 'doug')`);
+  const [row] = await stalled(p, 'nobody listening');
+  assert.deepEqual(row, { desk: 'partners', about: 'desk:partners', what: '1 due for its agent, and nobody listening',
+    fix: 'start it with its Start: task, or ask the person to open it (/desk partners listen)' });
+  assert.equal((await stalled(p, 'nobody listening')).length, 1, "the person's own task and later work don't count");
+
+  // A listener counts while it has looked in the last 15 minutes.
+  await p.sql(`INSERT INTO locks(key, by, desk, doing) VALUES ('listen:partners', 'doug', 'partners', 'listening');
+    INSERT INTO listeners(desk, by, checked_at) VALUES ('partners', 'doug', ${q(minutesAgo(20))})`);
+  assert.equal((await stalled(p, 'nobody listening')).length, 1);
+  await p.sql(`UPDATE listeners SET checked_at = ${q(minutesAgo(1))} WHERE desk = 'partners'`);
+  assert.equal((await stalled(p, 'nobody listening')).length, 0);
+
+  // Started by the GM in the last hour and still not listening: the person is asked instead.
+  await p.sql("DELETE FROM locks WHERE key = 'listen:partners'");
+  await p.sql(gmSql['sessions.md'][0]);
+  assert.match((await stalled(p, 'nobody listening'))[0].fix, /^started at .* and still not listening: ask the person to open it \(\/desk partners listen\)$/);
+  await p.sql("UPDATE tasks SET status = 'done', result = 'answered' WHERE desk = 'partners'");
+  assert.equal((await stalled(p, 'nobody listening')).length, 0);
+});
+
+test('the watchdog lists late briefs, stuck sends, late audits, stale headlines and late checks until each is fixed', async () => {
+  const p = await project({ gm: {}, partners: {}, seo: {} });
+
+  // A brief past its due, and one open a week with none.
+  const late = await create(p, briefAction({ payload: briefPayload({ due: daysFromNow(-2), about: 'brand:acme' }) }));
+  const open = await create(p, briefAction({ about: 'brand:beta', payload: briefPayload({ about: 'brand:beta' }) }));
+  for (const b of [late, open]) {
+    await p.sql(approve(b));
+    assert.equal((await p.run(['send', String(b)])).code, 0);
+  }
+  assert.deepEqual((await stalled(p, 'brief overdue')).map((r) => r.about), [`brief:${late}`]);
+  await p.sql(`UPDATE actions SET sent_at = ${q(minutesAgo(8 * 1440))} WHERE id = ${open}`);
+  const briefs = await stalled(p, 'brief overdue');
+  assert.deepEqual(briefs.map((r) => [r.desk, r.about]), [['partners', `brief:${late}`], ['partners', `brief:${open}`]]);
+  assert.match(briefs[0].what, new RegExp(`due ${daysFromNow(-2)}$`));
+  assert.match(briefs[1].what, /after 8 days$/);
+  await p.sql(`UPDATE tasks SET status = 'done', result = 'listed' WHERE source IN ('brief:${late}', 'brief:${open}')`);
+  assert.equal((await stalled(p, 'brief overdue')).length, 0);
+
+  // Sending for more than 15 minutes, uncertain for more than an hour.
+  await trusted(p);
+  const s = await create(p);
+  await p.sql(`${approve(s)}\n${claim(s)}\nUPDATE actions SET updated_at = ${q(minutesAgo(5))} WHERE id = ${s}`);
+  assert.equal((await stalled(p, 'stuck sending')).length, 0);
+  await p.sql(`UPDATE actions SET updated_at = ${q(minutesAgo(16))} WHERE id = ${s}`);
+  assert.match((await stalled(p, 'stuck sending'))[0].fix, /^check the provider/);
+  await p.sql(`UPDATE actions SET status = 'uncertain' WHERE id = ${s}`);
+  assert.equal((await stalled(p, 'stuck sending')).length + (await stalled(p, 'uncertain')).length, 0);
+  await p.sql(`UPDATE actions SET updated_at = ${q(minutesAgo(61))} WHERE id = ${s}`);
+  assert.deepEqual((await stalled(p, 'uncertain')).map((r) => r.about), [`action:${s}`]);
+  await p.sql(`UPDATE actions SET status = 'sent', provider_ref = 'ref-${s}' WHERE id = ${s}`);
+  assert.equal((await stalled(p, 'uncertain')).length, 0);
+
+  // Sent alone more than a week ago and not audited.
+  const alone = await sentAlone(p);
+  assert.equal((await stalled(p, 'audit overdue')).length, 0);
+  await p.sql(`UPDATE actions SET sent_at = ${q(minutesAgo(8 * 1440))} WHERE id = ${alone}`);
+  assert.deepEqual((await stalled(p, 'audit overdue')).map((r) => [r.desk, r.about]), [['seo', `action:${alone}`]]);
+  await p.sql(audit(`action:${alone}`, 'pass', { by: 'sam' }));
+  assert.equal((await stalled(p, 'audit overdue')).length, 0);
+
+  // A headline not measured for a week, or never on a desk older than that.
+  await p.sql(`INSERT INTO measures(desk, name, value, source, by, observed_at) VALUES ('seo', 'clicks-7d', 900, 'search console', 'doug', ${q(minutesAgo(8 * 1440))});
+    UPDATE desks SET created_at = ${q(minutesAgo(8 * 1440))} WHERE name = 'gm'`);
+  const stale = await stalled(p, 'headline stale');
+  assert.deepEqual(stale.map((r) => r.desk), ['gm', 'seo']);
+  assert.match(stale[0].what, /clicks-7d has never been measured/);
+  await p.sql("INSERT INTO measures(desk, name, value, source, by) VALUES ('seo', 'clicks-7d', 950, 'search console', 'doug')");
+  assert.deepEqual((await stalled(p, 'headline stale')).map((r) => r.desk), ['gm']);
+
+  // A check past its date. On the day, it's due, not late.
+  const check = (await p.one(`INSERT INTO checks(desk, about, metric, baseline, check_at, created_by)
+    VALUES ('seo', 'page:/a', 'clicks', 40, date('now'), 'doug') RETURNING id`)).id;
+  assert.equal((await stalled(p, 'check overdue')).length, 0);
+  await p.sql(`UPDATE checks SET check_at = ${q(daysFromNow(-1))} WHERE id = ${check}`);
+  assert.deepEqual((await stalled(p, 'check overdue')).map((r) => r.about), [`check:${check}`]);
+  await p.sql(`UPDATE checks SET value = 55, verdict = 'better', measured_at = :now, measured_by = 'doug' WHERE id = ${check}`);
+  assert.equal((await stalled(p, 'check overdue')).length, 0);
+});
+
+test('status shows the watchdog, a missed round, and how each desk starts', async () => {
+  const p = await project({ partners: { round: 'daily 00:00', start: 'scheduled-task partners-desk' }, seo: { round: 'daily 00:00' } });
+  // Desks made today haven't missed today's midnight round.
+  let st = JSON.parse((await p.run(['status', '--json'])).out);
+  assert.deepEqual(st.watchdog, []);
+  assert.deepEqual(st.board.map((b) => [b.desk, b.start]), [['partners', 'scheduled-task partners-desk'], ['seo', null]]);
+
+  await p.sql(`UPDATE desks SET created_at = ${q(minutesAgo(3 * 1440))};
+    INSERT INTO tasks(desk, what, created_by) VALUES ('seo', 'refresh the titles', 'doug')`);
+  st = JSON.parse((await p.run(['status', '--json'])).out);
+  assert.deepEqual(st.watchdog.map((w) => [w.desk, w.problem, w.what.replace(/was due .*?,/, 'was due <time>,')]), [
+    ['partners', 'nobody listening', 'its round was due <time>, and nobody listening'],
+    ['seo', 'nobody listening', '1 due for its agent, and nobody listening'],
+  ]);
+
+  // A listener that looked after the round has it in hand.
+  await p.sql(`INSERT INTO locks(key, by, desk, doing) VALUES ('listen:partners', 'doug', 'partners', 'listening');
+    INSERT INTO listeners(desk, by, checked_at) VALUES ('partners', 'doug', ${q(minutesAgo(1))})`);
+  const text = (await p.run(['status'])).out;
+  assert.match(text, /^partners: .* · starts with scheduled task partners-desk/m);
+  assert.match(text, /Stalled \(the watchdog: what fixes each\)/);
+  assert.match(text, /seo +nobody listening/);
+  assert.doesNotMatch(text, /partners +nobody listening/);
+});
+
+test('a Start: line says which scheduled task starts the desk', async () => {
+  const p = await project({ partners: { start: 'scheduled-task partners-desk' } });
+  const md = path.join(p.dir, 'desks/partners/desk.md');
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace('scheduled-task partners-desk', 'when Doug says'));
+  const bad = await p.run(['init']);
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /desks\/partners\/desk.md: Start: when Doug says isn't how a desk starts: write Start: scheduled-task <task id>/);
+  assert.equal((await p.run(['status'])).code, 0, 'status still runs');
 });

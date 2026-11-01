@@ -463,8 +463,9 @@ function sha(text) {
 // A desk is a folder in desks/ with a desk.md. Its header lines before the first ##
 // can say Headline:, Target:, Needs: (env var names, comma separated), Mail: (the
 // addresses the desk answers, comma separated), Round: (when its rounds are due, such as
-// weekdays 09:00), Agent: (the name its agent works under) and Type: (the kind of desk it
-// started as, from kit/types/: a gm desk only briefs).
+// weekdays 09:00), Agent: (the name its agent works under), Type: (the kind of desk it
+// started as, from kit/types/: a gm desk only briefs) and Start: (how the GM starts it when
+// it has work and nobody is listening: scheduled-task <task id>).
 function desksOnDisk() {
   let types = [];
   try { types = fs.readdirSync(path.join(KIT, 'types')); } catch {}
@@ -486,6 +487,7 @@ function desksOnDisk() {
         round: field('Round'),
         agent: field('Agent')?.toLowerCase(),
         type: field('Type')?.toLowerCase(),
+        start: field('Start'),
       };
     })
     .map((d) => {
@@ -494,6 +496,7 @@ function desksOnDisk() {
         : d.agent && isPerson(d.agent) ? `${at}: Agent: ${d.agent} is you (DESK_USER): the database can't tell your say-so from its work, so give the agent a name of its own`
         : d.type && !types.includes(d.type) ? `${at}: Type: ${d.type} is not a kit type: use one of ${types.join(', ') || '(none)'} (desks/kit/types/)`
         : d.type && d.type !== d.name ? `${at}: Type: ${d.type} is for desks/${d.type}: a desk made from a type takes its name`
+        : d.start && !/^scheduled-task [a-z0-9][a-z0-9-]*$/i.test(d.start) ? `${at}: Start: ${d.start} isn't how a desk starts: write Start: scheduled-task <task id>`
         : null;
       return { ...d, fault };
     });
@@ -606,7 +609,15 @@ function listeningNow({ by, looked }) {
 async function status(flags, deskName) {
   const db = await open();
   const desk = deskName ?? flags.desk ?? null;
-  const v = { ...autoParams(), d: desk, me: USER ?? '' };
+  // Each desk's latest scheduled round, so the watchdog can say a desk missed one. A Round:
+  // line that can't be read is doctor's to report.
+  let onDisk = new Map();
+  try { onDisk = new Map(desksOnDisk().map((d) => [d.name, d])); } catch {}
+  const rounds = {};
+  for (const d of onDisk.values()) {
+    try { if (d.round) rounds[d.name] = roundsDue(parseRound(d.round), null, new Date()).latest?.toISOString(); } catch {}
+  }
+  const v = { ...autoParams(), d: desk, me: USER ?? '', rounds: JSON.stringify(rounds) };
   const f = (alias = '') => `(:d IS NULL OR ${alias}desk = :d)`;
   const { results } = await execute(db, `
     SELECT desk, waiting, due, in_flight, uncertain, locks, headline, value, previous, target, last_activity
@@ -626,14 +637,26 @@ async function status(flags, deskName) {
     SELECT name, desk, for_whom FROM agents WHERE ${f()} ORDER BY desk, name;
     SELECT desk, count(*) AS due, sum(trouble > 0) AS trouble FROM audit_due WHERE ${f()} GROUP BY desk;
     SELECT id, desk, checked, verdict, notes, by FROM audit_findings WHERE ${f()} ORDER BY id DESC;
+    SELECT desk, problem, about, what, since, fix FROM (
+      SELECT * FROM watchdog
+      UNION ALL
+      SELECT u.desk, 'nobody listening', 'desk:' || u.desk, 'its round was due ' || r.value || ', and nobody listening',
+        r.value, u.fix
+      FROM unheard u JOIN json_each(:rounds) r ON r.key = u.desk
+      WHERE r.value > coalesce(u.looked_at, u.created_at)
+        AND NOT EXISTS (SELECT 1 FROM due x WHERE x.desk = u.desk AND x.owner = 'agent'))
+    WHERE ${f()} ORDER BY desk, since;
   `, v);
+  const startOf = (name) => onDisk.get(name)?.start ?? null;
   if (flags.json) {
-    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening', 'briefs', 'agents', 'audits_due', 'audit_findings'];
-    console.log(JSON.stringify(Object.fromEntries(results.map((r, i) => [names[i], asObjects(r.cols, r.rows)])), null, 2));
+    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening', 'briefs', 'agents', 'audits_due', 'audit_findings', 'watchdog'];
+    const out = Object.fromEntries(results.map((r, i) => [names[i], asObjects(r.cols, r.rows)]));
+    for (const b of out.board) b.start = startOf(b.desk);
+    console.log(JSON.stringify(out, null, 2));
     db.close();
     return;
   }
-  const [board, waiting, due, flight, locks, holds, trust, lessons, listening, briefs, agents, auditsDue, findings] = results;
+  const [board, waiting, due, flight, locks, holds, trust, lessons, listening, briefs, agents, auditsDue, findings, watchdog] = results;
   const heard = new Map(listening.rows.map(([d, by, , looked]) => [d, { by, looked }]));
   const briefed = new Map(briefs.rows.map(([d, n, days]) => [d, { n, days }]));
   const unaudited = new Map(auditsDue.rows.map(([d, n, trouble]) => [d, { n, trouble }]));
@@ -651,6 +674,7 @@ async function status(flags, deskName) {
     if (au) bits.push(`${au.n} sent alone, not audited${au.trouble ? ` (${au.trouble} with trouble since)` : ''}`);
     const ear = heard.get(name);
     if (ear) bits.push(listeningNow(ear));
+    if (startOf(name)) bits.push(`starts with ${startOf(name).replace(/^scheduled-task /i, 'scheduled task ')}`);
     let line = `${name}: ${bits.join(' · ')}`;
     if (headline) line += ` · ${headline} ${value ?? 'not measured yet'}${previous !== null && previous !== undefined ? ` (was ${previous})` : ''}`;
     if (target) line += ` · target ${target}`;
@@ -665,6 +689,7 @@ async function status(flags, deskName) {
     console.log(`\n${title}\n${table(r.cols, rows)}${more ? `\n... and ${more} more: node desks/desk.mjs sql "${rest}"` : ''}`);
   };
   const where = desk ? ` WHERE desk = '${desk.replace(/'/g, "''")}'` : '';
+  section('Stalled (the watchdog: what fixes each)', watchdog, 20, `SELECT * FROM watchdog${where}`);
   section('Waiting for a person', waiting);
   section('Due', due, 20, `SELECT * FROM due${where}`);
   section('In flight (sending for more than a few minutes: check the provider before anything else)', flight);

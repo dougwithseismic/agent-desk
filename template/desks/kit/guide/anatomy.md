@@ -53,6 +53,7 @@ Mail: <the desk's own email addresses, if it answers mail>
 Round: <when its round is due, if it runs on a schedule: weekdays 09:00>
 Agent: <the name its agent works under, if it has one: gm>
 Type: <the kind of desk, when the database treats it differently: gm>
+Start: <the scheduled task that starts it, if the GM starts it: scheduled-task partners-desk>
 
 ## Purpose
 What it's for, who it serves, who owns it, and what "working" looks like.
@@ -101,6 +102,10 @@ works without a person in the chat.
 means something: a `gm` desk prepares briefs and initiatives and nothing else. Types also
 come with a starting desk in `kit/types/<type>/`: its `desk.md`, `schema.sql`, playbooks and
 any files it needs, with blanks the setup conversation fills (`new-desk`).
+
+`Start:` names the app's scheduled task that opens the desk listening, for a GM that starts
+desks when they have work and nobody is listening (`kit/types/gm/playbooks/sessions.md`).
+`status` shows it. Leave it out and the person opens the desk.
 
 ## schema.sql: the desk's own tables
 

@@ -4,6 +4,22 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-01
 
+### A watchdog for stalled work, and a GM that starts desks (PRD 16) · New
+- `status` now has a "Stalled" list, with what fixes each item:
+  - a desk with work for its agent, or a missed round, and nobody listening;
+  - a brief past its due;
+  - something stuck sending or uncertain;
+  - work that went out alone a week ago and still isn't audited;
+  - a headline nobody has measured for a week;
+  - a check past its date.
+
+  Each item goes away once it's fixed.
+- With your yes, each desk gets a scheduled task in the Claude Code app, named on a `Start:`
+  line in its `desk.md`. The GM starts a desk when it has work and nobody is listening, logs
+  each start, and asks you instead if a desk it started still isn't listening an hour later.
+- A desk opened while another chat is already listening to it says so and stops, rather than
+  taking over.
+
 ### A GM desk runs the business towards money and runs the other desks (PRD 15) · New
 - Say "set up a GM" and `new-desk` starts from the GM type. It asks for the money goal and
   target, what the GM may decide alone, a Stripe key (or test mode until there is one) and
