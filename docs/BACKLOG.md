@@ -65,7 +65,7 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
 ### Rows
 
 - [x] **PRD 11** Briefs: desks hand work to each other (`docs/prds/11-briefs.md`).
-- [~] (building since 2026-11-01, main session; core migration 001) **PRD 12** Agents work under their own names: they tighten, people loosen
+- [x] **PRD 12** Agents work under their own names: they tighten, people loosen
       (`docs/prds/12-agents-tighten.md`). Needs 11.
 - [ ] **PRD 13** Audits: spot checks both ways (`docs/prds/13-audits.md`). Needs 12.
 - [ ] **PRD 14** Stripe as a source, read-only (`docs/prds/14-stripe.md`).
