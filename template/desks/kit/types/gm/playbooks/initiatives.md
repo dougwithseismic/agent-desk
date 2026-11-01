@@ -34,7 +34,8 @@ The body says, in plain words:
 - the check that will say whether it worked;
 - the first step.
 
-Show it in full after the person's brief, and ask: go, change or drop?
+In the person's brief it's one of the things that need them: when you reach it, show it in
+full and ask: go, change or drop?
 
 ## 3. Once approved
 

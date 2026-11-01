@@ -4,6 +4,18 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-01
 
+### The GM talks you through its brief in the chat · Improved
+- The GM's brief is now a conversation in its chat instead of a file: where things stand in
+  a few sentences, then one question at a time, so you can discuss each before answering.
+  The desks, audits and the rest come up when you ask.
+
+### Desks find the Stripe key themselves · Improved
+- `DESK_STRIPE_KEY=stripe-cli:<profile>` uses the key a Stripe CLI login already saved, and
+  `env:<NAME>` uses a key the project already keeps in another variable. A desk looks for
+  those before asking you for a restricted key. `doctor` says where the key came from and,
+  for a CLI login, until when it lasts.
+- A live secret key is still refused, wherever it comes from.
+
 ### The watchdog shows what you approved that nobody has sent · Fixed
 - Actions you approved that still haven't gone a day later now show under "Stalled" in
   `status`, one line per desk: how many, the oldest, and what fixes it (open the desk's

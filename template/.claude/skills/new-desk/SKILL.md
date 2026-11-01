@@ -117,9 +117,11 @@ Set it up in the same conversation, one thing at a time:
   `revenue-28d`, or `mrr` for a subscription business, with a target and a date.
 - **The mandate** (`mandate.md`): what it may decide alone, its budget (0 unless they set
   one), and what always stays with them. Read them the always-human list and ask what to add.
-- **Stripe.** A restricted read key in `desks/.env`, written by them (`revenue.md`). With no
-  key yet, a test key (`rk_test_` or `sk_test_`) lets the GM run on test data until there is
-  one; say its numbers aren't the business's.
+- **Stripe.** Find the key yourself first, in `revenue.md`'s order: a variable the project
+  already has, then a Stripe CLI login for this business. Only if neither is there, ask them
+  for a restricted read key, written into `desks/.env` by them. With only a test key
+  (`rk_test_` or `sk_test_`) the GM runs on test data until there is a live one; say its
+  numbers aren't the business's.
 - **The desks it runs.** The desks in this project it may brief, a line each in
   `mandate.md`. A desk it should run but that doesn't exist yet is an initiative for later,
   not something to build now.

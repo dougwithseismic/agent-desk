@@ -44,18 +44,19 @@ round. A desk without mail can listen for those alone. `status` shows who is lis
 ### Desks that read revenue
 
 `node desks/desk.mjs stripe revenue` (or `mrr`, `customers`, `failed`) reads what the
-business earns from Stripe with a restricted, read-only key in `desks/.env`, and
-`--record` saves it as the desk's headline. Any other read is `stripe <path>`. It only
-sends GETs and refuses a live secret key: changes in Stripe stay with a person
-(`desks/kit/playbooks/revenue.md`).
+business earns from Stripe, and `--record` saves it as the desk's headline. Any other read is
+`stripe <path>`. The key comes from a variable the project already has, a Stripe CLI login, or
+a restricted key in `desks/.env`. It only sends GETs and refuses a live secret key: changes in
+Stripe stay with a person (`desks/kit/playbooks/revenue.md`).
 
 ### A GM that runs the other desks
 
 Say "set up a GM" and `new-desk` starts from the GM type (`desks/kit/types/gm`). The GM runs
 the business towards a money target and runs the other desks. Each round it records revenue
 from Stripe and reads every desk. It audits what went out alone, checks its bets, and briefs
-the desks on what to do next. Then it writes you one brief with yes-or-no questions. It
-briefs; it doesn't do (see the guards below).
+the desks on what to do next. Then it talks you through one brief in the chat, a yes-or-no
+question at a time, so you can discuss each one. It briefs; it doesn't do (see the guards
+below).
 
 A watchdog notices stalled work without anyone looking: a desk with work and nobody listening,
 a round missed, approved actions nobody sent for a day, a brief past its due, a send stuck or

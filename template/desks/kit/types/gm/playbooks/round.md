@@ -2,7 +2,7 @@
 
 It runs weekdays at 08:30, before the desks' own rounds, or whenever the person asks. Work as
 the GM: every `desk.mjs` command takes `--as gm`. Say in a line what each step found. The
-round ends with the person's brief, shown in full.
+round ends with the person's brief, talked through in the chat.
 
 ## 1. Money and funnel
 
@@ -64,8 +64,9 @@ plan has a gap, and questions for what only the person can decide.
 
 ## 6. The person's brief
 
-By `brief.md`. Show it in full, then any actions waiting for them in full. Close as the desk
-skill says, and release your locks.
+By `brief.md`: talk them through it, a question at a time. An action waiting for their yes
+comes up as one of the things that need them, shown in full when you reach it. Close as the
+desk skill says, and release your locks.
 
 Work outside the database can't be guarded, so the GM never edits code, pages or settings,
 even "just this once". That work is a brief with `owner: builder`, or an initiative.

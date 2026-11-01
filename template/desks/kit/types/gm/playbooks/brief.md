@@ -1,36 +1,33 @@
 # The person's brief
 
-Once a round, one message the person can read in a few minutes. Write it to
-`desks/data/gm/brief-<date>.md`, show it in full, and record it.
+Once a round, the GM talks the person through where the business stands and what it needs
+from them, here in the chat. It's a conversation, not a report: no file to open, no headings,
+no tables or code blocks. They can ask about any part, push back, or answer in their own
+words, and the GM answers before going on.
 
-## What's in it, in order
+## How it goes
 
-```text
-<Business>: <headline> <value> (was <previous>) · target <target> by <date>
-Since <the last brief's date>: <what moved, in a line or two>
+1. **Where things stand**, in two or three sentences: the headline against its target, what
+   moved since the last brief, and the one thing that matters most right now. A failed audit,
+   or something stuck for days, belongs here too.
+2. **What needs them**, one thing at a time, most money first. Ask one question and wait.
+   When they answer, record it and act on it (Answers, below), then go on to the next. A
+   question they want to think about stays open: say so and move on. After the questions,
+   the things only they can do, a line each, with what each unblocks.
+3. **The rest when they ask.** The desks one by one, what went out alone and the audits,
+   holds the GM placed, briefs closed, desks it started, the watchdog's rows. Offer it in a
+   line ("partners is at 3 of 10, seo is up to 112 clicks, ppc has no numbers yet: want the
+   detail?") and go into any of it when they ask.
 
-Desks
-  partners: <headline against its target> · <what it did, and what's next>
-  seo: ...
+Talk the way you would to them across a desk. Short sentences, plain words. Name work by what
+it is ("the 20 first emails to movers"), with an id after it when they might look it up.
 
-Went out alone: <n> since last time, <n> audited: <each fail or unsure, a line each>
-Paused: <holds the GM placed, with why>
-Briefs closed: <title> → <result>, a line each
-Started: <desks the GM started, and why>
-Stuck: <the watchdog's rows the GM couldn't fix, and things waiting for you for days>
-
-Questions
-  1. <question>? Yes: <what happens>. No: <what happens>. I'd say yes: <why, in a line>.
-  2. ...
-
-Yours to do, most money first
-  - <task> (<desk>, due <date>)
-```
-
-- Every number comes from `measures`, never from memory. A number missing today says so.
-- "Since last time" is since the last brief's log row (below): `went_alone` and `briefs`
+- Every number comes from `measures`, never from memory. A number missing today says so, and
+  why.
+- "Since the last brief" is since the last brief's log row (below): `went_alone` and `briefs`
   after its time. Fails and unsures come from `audit_findings`.
-- One line per desk. More when they ask.
+- If they aren't in the chat when the round ends, the questions wait as their tasks, and the
+  brief starts when they next speak.
 
 ## Questions
 
@@ -44,16 +41,17 @@ VALUES ('gm', 'Raise the annual plan from $240 to $290? Yes: once you change it 
 
 - One decision per question, answerable yes or no. Say what each answer does, then your
   recommendation and why, in a line.
-- Number the open questions afresh in each brief, oldest first. Record which task each number
-  is, so that "2 yes" finds the right one:
+- Number the open questions afresh in each brief, oldest first, and keep the numbers when you
+  ask them, so that "2 yes" finds the right one even when they answer several at once. Record
+  the brief before you start, with what you said in step 1 and the questions in order:
 
 ```sql
-INSERT INTO log(desk, by, kind, about, summary, ref, details)
-VALUES ('gm', :me, 'note', 'gm-brief:' || :today, 'brief to the person', 'desks/data/gm/brief-' || :today || '.md',
-  json_object('questions', json(:questions)));
+INSERT INTO log(desk, by, kind, about, summary, details)
+VALUES ('gm', :me, 'note', 'gm-brief:' || :today, :said, json_object('questions', json(:questions)));
 ```
 
-with `-a questions=[41,44,45]`, the open questions' task ids in the order you numbered them.
+with `-a said='<your two or three sentences>' -a questions=[41,44,45]`, the open questions'
+task ids in the order you numbered them.
 
 ## Answers
 

@@ -1931,6 +1931,66 @@ test('a missing, mistyped or refused Stripe key is named by stripe and doctor, n
   assert.deepEqual(s.requests.at(-1), { method: 'GET', name: 'balance_transactions', query: { limit: '1' } });
 });
 
+test('DESK_STRIPE_KEY can name another variable that holds the key, and the same guards apply', async () => {
+  const s = await fakeStripe(stripeData());
+  const p = await project({ gm: { needs: 'DESK_STRIPE_KEY' } });
+  fs.writeFileSync(path.join(p.dir, '.env'), `STRIPE_READ_KEY=${s.key}\nSTRIPE_SECRET_KEY=sk_live_appsecret321\n`);
+  const via = (name) => ({ env: { DESK_STRIPE_URL: s.env.DESK_STRIPE_URL, DESK_STRIPE_KEY: `env:${name}` } });
+  const doc = await p.run(['doctor'], via('STRIPE_READ_KEY'));
+  assert.match(doc.out, /ok +Stripe reads in test mode, in/);
+  const read = await p.run(['stripe', 'charges', 'limit=1'], via('STRIPE_READ_KEY'));
+  assert.equal(read.code, 0, read.err);
+
+  const before = s.requests.length;
+  const secret = await p.run(['stripe', 'charges'], via('STRIPE_SECRET_KEY'));
+  assert.match(secret.err, /STRIPE_SECRET_KEY \(named by DESK_STRIPE_KEY\) is a live secret key/);
+  const unset = await p.run(['doctor'], via('STRIPE_NOWHERE'));
+  assert.match(unset.out, /fix +DESK_STRIPE_KEY says env:STRIPE_NOWHERE, but STRIPE_NOWHERE isn't set/);
+  assert.equal(s.requests.length, before);
+  for (const r of [doc, read, secret, unset]) assert.ok(!/desk123|appsecret321/.test(r.out + r.err), r.out + r.err);
+});
+
+test('DESK_STRIPE_KEY can name a Stripe CLI login by its profile, never the default one', async () => {
+  const s = await fakeStripe(stripeData());
+  const p = await project({ gm: { needs: 'DESK_STRIPE_KEY' } });
+  const xdg = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-stripe-'));
+  fs.mkdirSync(path.join(xdg, 'stripe'));
+  const later = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+  const login = (acmeTestExpires = later) => fs.writeFileSync(path.join(xdg, 'stripe', 'config.toml'), [
+    "color = ''", '[default]', "display_name = 'Another business'", "test_mode_api_key = 'sk_test_otherbusiness9'", `test_mode_key_expires_at = '${later}'`,
+    '[acme]', "account_id = 'acct_acme'", "display_name = 'Acme'", "live_mode_api_key = 'rk_live_acmecli777'", `live_mode_key_expires_at = '${later}'`,
+    `test_mode_api_key = '${s.key}'`, `test_mode_key_expires_at = '${acmeTestExpires}'`, ''].join('\n'));
+  login();
+  const cli = (value) => ({ env: { DESK_STRIPE_URL: s.env.DESK_STRIPE_URL, DESK_STRIPE_KEY: value, XDG_CONFIG_HOME: xdg } });
+
+  const doc = await p.run(['doctor'], cli('stripe-cli:acme:test'));
+  assert.match(doc.out, new RegExp(`ok +Stripe reads in test mode with the Stripe CLI's acme login \\(test mode\\) \\(Acme, until ${later}\\)`));
+  assert.doesNotMatch(doc.out, /gm needs/);
+  const read = await p.run(['stripe', 'charges', 'limit=1'], cli('stripe-cli:acme:test'));
+  assert.equal(read.code, 0, read.err);
+
+  // Its live key is read too, and still goes nowhere but Stripe.
+  const before = s.requests.length;
+  const live = await p.run(['stripe', 'charges'], cli('stripe-cli:acme'));
+  assert.match(live.err, /a live key goes only to https:\/\/api.stripe.com/);
+  const missing = await p.run(['doctor'], cli('stripe-cli:nobody'));
+  assert.match(missing.out, /fix +DESK_STRIPE_KEY says stripe-cli:nobody, but the Stripe CLI on this machine has no nobody login with a live key: run stripe login --project-name nobody/);
+  const bare = await p.run(['stripe', 'charges'], cli('stripe-cli:'));
+  assert.match(bare.err, /write stripe-cli:<profile>/);
+  login('2020-01-01');
+  const expired = await p.run(['stripe', 'charges'], cli('stripe-cli:acme:test'));
+  assert.match(expired.err, /the Stripe CLI's acme login \(test mode\) expired on 2020-01-01: run stripe login --project-name acme/);
+  assert.equal(s.requests.length, before, 'no call to Stripe without a usable key');
+
+  login();
+  s.key = 'rk_test_rotated000';
+  const revoked = await p.run(['stripe', 'charges'], cli('stripe-cli:acme:test'));
+  assert.match(revoked.err, /Stripe refused the Stripe CLI's acme login \(test mode\) \(401: .*\): it may be revoked; run stripe login --project-name acme/);
+  for (const r of [doc, read, live, missing, bare, expired, revoked]) {
+    assert.ok(!/acmecli777|otherbusiness9|desk123/.test(r.out + r.err), r.out + r.err);
+  }
+});
+
 // ---------- the GM: it briefs, the desks do ----------
 
 const desksForGm = { gm: { agent: 'gm', type: 'gm' }, partners: {} };
@@ -2093,7 +2153,9 @@ test('a GM round, in a project with two desks and a fake Stripe', async () => {
   await gmAsk(p, 'Start the affiliate program? Yes: I brief a builder. No: it stays a bet.');
   const asks = (await p.sql("SELECT id, owner, created_by FROM tasks WHERE source = 'ask' ORDER BY id", gm));
   assert.deepEqual(asks.map((t) => [t.owner, t.created_by]), [['doug', 'gm'], ['doug', 'gm']]);
-  await p.sql(note, { ...gm, args: { questions: JSON.stringify(asks.map((t) => t.id)) } });
+  const opening = 'Revenue is 1,240 of 3,000 a month, up 180 since Monday. The affiliate bet is what matters this week.';
+  await p.sql(note, { ...gm, args: { said: opening, questions: JSON.stringify(asks.map((t) => t.id)) } });
+  assert.equal((await p.one("SELECT summary FROM log WHERE about GLOB 'gm-brief:*'", gm)).summary, opening);
   const { task } = await p.one(find, gm);
   assert.equal(task, asks[1].id);
   await p.sql(answer, { ...gm, args: { task, words: '"2 yes"' } });

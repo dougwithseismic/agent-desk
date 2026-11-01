@@ -47,11 +47,15 @@
 //   DESK_MAIL_TOKEN  that Worker's MAIL_API_TOKEN
 //   DESK_MAIL_PREFIX  the word inbox ids for mail start with: mail (the default), or the one
 //                     a project's own Worker already uses (acme-mail:<mailbox>:<id>)
-//   DESK_STRIPE_KEY  a restricted Stripe key with read access (rk_live_ or rk_test_), or a test
-//                    secret key (sk_test_); a live secret key is refused (kit/playbooks/revenue.md)
+//   DESK_STRIPE_KEY  a restricted Stripe key with read access (rk_live_ or rk_test_) or a test
+//                    secret key (sk_test_); env:<NAME> for a key already in another variable;
+//                    or stripe-cli:<profile> for the key the Stripe CLI saved at
+//                    `stripe login --project-name <profile>`. A live secret key is refused
+//                    (kit/playbooks/revenue.md)
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -108,9 +112,8 @@ const isPerson = (name) => Boolean(PERSON) && name === PERSON.toLowerCase();
 const isWord = (x) => /^[a-z][a-z0-9-]*$/.test(x);
 const HOSTED = /^(https?|libsql):\/\//.test(DB);
 const MAIL_URL = setting('DESK_MAIL_URL')?.replace(/\/+$/, '');
-const STRIPE_KEY = setting('DESK_STRIPE_KEY');
+const STRIPE_SETTING = setting('DESK_STRIPE_KEY');
 const STRIPE_URL = setting('DESK_STRIPE_URL', 'https://api.stripe.com').replace(/\/+$/, '');
-const STRIPE_MODE = /^(rk|sk)_test_/.test(STRIPE_KEY ?? '') ? 'test' : 'live';
 const MAIL_TOKEN = setting('DESK_MAIL_TOKEN');
 const MAIL_PREFIX = setting('DESK_MAIL_PREFIX', 'mail');
 
@@ -1528,11 +1531,13 @@ async function doctor() {
     }
   }
 
-  if (STRIPE_KEY) {
+  if (STRIPE_SETTING) {
     try {
       const t0 = Date.now();
       await stripeGet('balance_transactions', [['limit', '1']]);
-      ok(`Stripe reads in ${STRIPE_MODE} mode, in ${Date.now() - t0} ms`);
+      const { mode, from, login, expires } = stripeKey();
+      const whose = login && [login.display_name || login.account_id, expires && `until ${expires}`].filter(Boolean).join(', ');
+      ok(`Stripe reads in ${mode} mode${login ? ` with ${from}${whose ? ` (${whose})` : ''}` : ''}, in ${Date.now() - t0} ms`);
     } catch (e) {
       bad(e.message);
     }
@@ -1602,24 +1607,61 @@ async function readStdin() {
 // Reads only. Every request is a GET, and a live secret key, which could change things, is
 // refused before any call. Changes in Stripe are a person's, in the Dashboard.
 
-function stripeKeyFault() {
-  if (!STRIPE_KEY) return 'DESK_STRIPE_KEY is not set: put a restricted key with read access (rk_live_ or rk_test_) in desks/.env (kit/playbooks/revenue.md)';
-  if (STRIPE_KEY.startsWith('sk_live_')) return 'DESK_STRIPE_KEY is a live secret key, which can change things in Stripe: make a restricted key with read access and use that (kit/playbooks/revenue.md)';
-  if (!/^(rk_live|rk_test|sk_test)_[A-Za-z0-9]+$/.test(STRIPE_KEY)) return "DESK_STRIPE_KEY isn't a key this command takes: it starts rk_live_, rk_test_ or sk_test_";
-  if (STRIPE_MODE === 'live' && STRIPE_URL !== 'https://api.stripe.com') return 'a live key goes only to https://api.stripe.com: take DESK_STRIPE_URL out of desks/.env';
-  return null;
+// DESK_STRIPE_KEY is the key itself; env:<NAME> for a key the project already keeps in
+// another variable (the environment, desks/.env or the project's .env); or
+// stripe-cli:<profile> for the live key the Stripe CLI saved at `stripe login --project-name
+// <profile>` (stripe-cli:<profile>:test for its test key). The profile is always named, never
+// the CLI's default, because one machine can be logged in to several businesses.
+let stripeFound;
+function stripeKey() {
+  if (stripeFound) return stripeFound;
+  const cli = STRIPE_SETTING?.startsWith('stripe-cli:');
+  const [, profile, cliMode = 'live'] = STRIPE_SETTING?.match(/^stripe-cli:([^:\s]+)(?::(live|test))?$/) ?? [];
+  const login = profile ? stripeCliLogin(profile) : null;
+  const named = STRIPE_SETTING?.match(/^env:([A-Za-z_][A-Za-z0-9_]*)$/)?.[1];
+  const key = cli ? login?.[`${cliMode}_mode_api_key`] : named ? process.env[named] ?? deskEnv[named] ?? projectEnv[named] : STRIPE_SETTING;
+  const expires = login?.[`${cliMode}_mode_key_expires_at`];
+  const from = cli ? `the Stripe CLI's ${profile} login${cliMode === 'test' ? ' (test mode)' : ''}` : named ? `${named} (named by DESK_STRIPE_KEY)` : 'DESK_STRIPE_KEY';
+  const again = cli ? `run stripe login --project-name ${profile}` : 'make a new restricted key';
+  const mode = /^(rk|sk)_test_/.test(key ?? '') ? 'test' : 'live';
+  let fault = null;
+  if (!STRIPE_SETTING) fault = 'DESK_STRIPE_KEY is not set: put a restricted key with read access (rk_live_ or rk_test_) in desks/.env, env:<NAME> for a key already in another variable, or stripe-cli:<profile> to use a Stripe CLI login (kit/playbooks/revenue.md)';
+  else if (named && !key) fault = `DESK_STRIPE_KEY says env:${named}, but ${named} isn't set in the environment, desks/.env or the project's .env`;
+  else if (cli && !profile) fault = `DESK_STRIPE_KEY is "${STRIPE_SETTING}": write stripe-cli:<profile>, or stripe-cli:<profile>:test, with the name given to stripe login --project-name`;
+  else if (cli && !key) fault = `DESK_STRIPE_KEY says ${STRIPE_SETTING}, but the Stripe CLI on this machine has no ${profile} login with a ${cliMode} key: ${again}`;
+  else if (expires && expires < new Date().toISOString().slice(0, 10)) fault = `${from} expired on ${expires}: ${again}`;
+  else if (key.startsWith('sk_live_')) fault = `${from} is a live secret key, which can change things in Stripe: make a restricted key with read access and use that (kit/playbooks/revenue.md)`;
+  else if (!/^(rk_live|rk_test|sk_test)_[A-Za-z0-9]+$/.test(key)) fault = `${from} isn't a key this command takes: it starts rk_live_, rk_test_ or sk_test_`;
+  else if (mode === 'live' && STRIPE_URL !== 'https://api.stripe.com') fault = 'a live key goes only to https://api.stripe.com: take DESK_STRIPE_URL out of desks/.env';
+  return (stripeFound = { key, from, again, mode, login, expires, fault });
+}
+
+// The Stripe CLI keeps its logins in config.toml, one [profile] section each.
+function stripeCliLogin(profile) {
+  const dir = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  let text;
+  try { text = fs.readFileSync(path.join(dir, 'stripe', 'config.toml'), 'utf8'); } catch { return null; }
+  const login = {};
+  let section = null;
+  for (const line of text.split(/\r?\n/)) {
+    const head = line.match(/^\s*\[\s*(?:"([^"]+)"|'([^']+)'|([^\]\s]+))\s*\]/);
+    if (head) { section = head[1] ?? head[2] ?? head[3]; continue; }
+    const pair = section === profile && line.match(/^\s*([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/);
+    if (pair) login[pair[1]] = pair[2] ?? pair[3];
+  }
+  return Object.keys(login).length ? login : null;
 }
 // Stripe's messages may quote part of a key; never pass one on.
 const unkeyed = (text) => String(text).replace(/\b(sk|rk|pk)_(live|test)_[A-Za-z0-9*]+/g, '<key>');
 
 async function stripeGet(route, query = []) {
-  const fault = stripeKeyFault();
+  const { key, from, again, login, fault } = stripeKey();
   if (fault) fail(fault);
   const url = new URL(`${STRIPE_URL}/v1/${route}`);
   for (const [k, v] of query) url.searchParams.append(k, v);
   let res, text;
   try {
-    res = await fetch(url, { method: 'GET', headers: { authorization: `Bearer ${STRIPE_KEY}` }, redirect: 'manual', signal: AbortSignal.timeout(30000) });
+    res = await fetch(url, { method: 'GET', headers: { authorization: `Bearer ${key}` }, redirect: 'manual', signal: AbortSignal.timeout(30000) });
     text = await res.text();
   } catch (e) {
     fail(`could not reach Stripe at ${url.host} (${e.cause?.code || e.name})`);
@@ -1627,7 +1669,7 @@ async function stripeGet(route, query = []) {
   let json = null;
   try { json = JSON.parse(text); } catch {}
   const why = unkeyed(said(json, text));
-  if (res.status === 401) fail(`Stripe refused DESK_STRIPE_KEY (401: ${why}): it may be mistyped or revoked; make a new restricted key`);
+  if (res.status === 401) fail(`Stripe refused ${from} (401: ${why}): it may be ${login ? 'revoked' : 'mistyped or revoked'}; ${again}`);
   if (res.status === 403) fail(`the key can't read ${route} (403: ${why}): give the restricted key read access to it (kit/playbooks/revenue.md)`);
   if (res.status !== 200 || !json) fail(`Stripe answered ${res.status} for ${route}: ${why}`);
   return json;
@@ -1770,7 +1812,7 @@ async function stripe(flags, args) {
     const r = by[k] ?? summary.blank();
     return [k, { ...r, ...Object.fromEntries((summary.money ?? []).map((f) => [f, major(r[f], k)])) }];
   }));
-  const out = { mode: STRIPE_MODE, what: summary.what, ...(summary.window ? { days, from: from.toISOString(), to: to.toISOString() } : { at: to.toISOString() }),
+  const out = { mode: stripeKey().mode, what: summary.what, ...(summary.window ? { days, from: from.toISOString(), to: to.toISOString() } : { at: to.toISOString() }),
     ...(summary.overall ? rows.all : { currencies: rows }), ...(more ? { capped: 'stopped at 10,000 objects: the numbers are short' } : {}) };
   if (flags.record) {
     const desk = deskOf(flags) ?? fail('--record needs --desk <name>');
@@ -1784,7 +1826,7 @@ async function stripe(flags, args) {
       VALUES (:desk, :name, :value, :unit, :from, :to, :source, :me)`, {
       desk, name: flags.record, value, unit,
       from: summary.window ? from.toISOString().slice(0, 10) : null, to: to.toISOString().slice(0, 10),
-      source: `stripe ${route}${summary.window ? ` --days ${days}` : ''}${cur ? ` --currency ${cur}` : ''} (${STRIPE_MODE} mode)`,
+      source: `stripe ${route}${summary.window ? ` --days ${days}` : ''}${cur ? ` --currency ${cur}` : ''} (${stripeKey().mode} mode)`,
     });
     out.recorded = { desk, name: flags.record, value, unit };
   }

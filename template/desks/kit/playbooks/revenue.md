@@ -6,26 +6,52 @@ anything in Stripe. A refund, a price or a payout is a person's, made in the Das
 
 ## The key
 
-Ask the person for a restricted key. In the Stripe Dashboard, on the API keys page, they
-create a restricted key, give it **Read** on these and nothing on the rest:
+The `stripe` command takes its key from `DESK_STRIPE_KEY`, in the environment or
+`desks/.env`. Find one in this order, and stop at the first that works:
 
-- Balance, and Balance transactions where it's listed apart
-- Charges
-- Customers
-- Invoices
-- Prices and Products
-- Subscriptions
-- Payment Links
+1. **A variable that already holds a key.** If `DESK_STRIPE_KEY` is set, use it. If the
+   project already keeps a restricted or test key in a variable of its own, point at it:
+   `DESK_STRIPE_KEY=env:STRIPE_READ_KEY` reads that variable from the environment,
+   `desks/.env` or the project's `.env`, so the key isn't copied anywhere. Look for the
+   variable's name, never print its value.
+2. **The Stripe CLI.** If someone on this machine ran `stripe login`, the CLI saved a key
+   for that account. `DESK_STRIPE_KEY=stripe-cli:<profile>` uses its live key, and
+   `stripe-cli:<profile>:test` its test key. The profile is the name given at
+   `stripe login --project-name <profile>`. See which logins there are, without the keys:
 
-It goes in `desks/.env` as `DESK_STRIPE_KEY=rk_live_...`, written by the person, never pasted
-into the chat. A test key (`rk_test_` or `sk_test_`) reads test mode only, which is right for
-trying a desk out and wrong for its headline. The command refuses a live secret key
-(`sk_live_`) before it calls Stripe, because that key can change things, and sends a live
-key nowhere but Stripe.
+   ```bash
+   grep -E '^\[|display_name|account_id' "${XDG_CONFIG_HOME:-$HOME/.config}/stripe/config.toml"
+   ```
 
-Run `node desks/desk.mjs doctor`. It checks the key's kind and makes one small read. A 401
-means the key is mistyped or revoked; a 403 names what the key can't read yet. Add
-`Needs: DESK_STRIPE_KEY` to a desk that can't work without it.
+   Pick the profile whose `display_name` is this business. One machine is often logged in to
+   several, so never take the default one because it's there. You may write the
+   `stripe-cli:` line into `desks/.env` yourself: it names a login, it isn't a key. A CLI key
+   lasts 90 days. `doctor` says until when, and when it runs out the person runs
+   `stripe login --project-name <profile>` again.
+3. **A restricted key from the Dashboard.** Ask the person. On the API keys page they create
+   a restricted key, give it **Read** on these and nothing on the rest:
+
+   - Balance, and Balance transactions where it's listed apart
+   - Charges
+   - Customers
+   - Invoices
+   - Prices and Products
+   - Subscriptions
+   - Payment Links
+
+   It goes in `desks/.env` as `DESK_STRIPE_KEY=rk_live_...`, written by the person, never
+   pasted into the chat.
+
+Whichever it is, reads go through `desk.mjs stripe`: never `stripe post`, `stripe delete` or
+anything else in the CLI that changes things, and never a key in a command line, a log or the
+chat. A test key (`rk_test_` or `sk_test_`) reads test mode only, which is right for trying a
+desk out and wrong for its headline. The command refuses a live secret key (`sk_live_`)
+before it calls Stripe, wherever it came from, because that key can change things. It sends
+a live key nowhere but Stripe.
+
+Run `node desks/desk.mjs doctor`. It checks the key's kind, says where it came from and makes
+one small read. A 401 means the key is mistyped, revoked or expired; a 403 names what the key
+can't read yet. Add `Needs: DESK_STRIPE_KEY` to a desk that can't work without it.
 
 ## Reading
 
