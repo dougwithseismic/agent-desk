@@ -69,7 +69,7 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
       (`docs/prds/12-agents-tighten.md`). Needs 11.
 - [x] **PRD 13** Audits: spot checks both ways (`docs/prds/13-audits.md`). Needs 12.
 - [x] **PRD 14** Stripe as a source, read-only (`docs/prds/14-stripe.md`).
-- [ ] **PRD 15** The GM desk type, and desk types in the kit (`docs/prds/15-gm-desk.md`).
+- [~] (building since 2026-11-01, main session; core migration 002 reserved) **PRD 15** The GM desk type, and desk types in the kit (`docs/prds/15-gm-desk.md`).
       Needs 11–14.
 - [ ] **PRD 16** The GM starts desks' sessions, and a watchdog for stalled work
       (`docs/prds/16-sessions.md`). Needs 15. The watchdog view can land before the rest.
