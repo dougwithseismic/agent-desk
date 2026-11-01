@@ -193,7 +193,7 @@ Trust is learnt for each kind, channel and identity (`trust`, shown in words by 
 | --- | --- | --- |
 | Their words | 2 examples verified (`coach_needed`) | Ask what they'd say, tidy it keeping their words (`voice.md`), and show it |
 | Drafts | 5 in a row approved unchanged and verified (`needed`) | You write; they review every one |
-| Trusted | An edit or rejection | Allowed drafts go on their own; every 5th waits as a spot check (`check_every`) |
+| Trusted | An edit, a rejection or a failed audit | Allowed drafts go on their own; every 5th waits as a spot check (`check_every`) |
 
 The database does the counting:
 
@@ -201,8 +201,8 @@ The database does the counting:
 - An unchanged, human-approved draft adds 1 to `clean` when verified, and resets the
   spot-check count.
 - Five clean in a row make it `trusted`.
-- An edit or rejection sets `clean` back to 0, removes trust, and moves `epoch` on. An
-  approval from before that no longer counts.
+- An edit, a rejection or a failed audit (`audits.md`) sets `clean` back to 0, removes trust,
+  and moves `epoch` on. An approval from before that no longer counts.
 - Automatic sends never add to `clean`.
 
 Tell them when trust is earned or lost, and how to take it back.

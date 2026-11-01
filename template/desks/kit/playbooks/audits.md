@@ -5,9 +5,8 @@ the other four get checked: someone who didn't do the work reads it afterwards a
 whether it was right. A GM audits the desks it runs, and the person can audit anything,
 the GM included.
 
-An audit that fails takes trust away from that kind of action, as a rejection does. The desk
-then shows its next ones to a person until it earns trust again. Nobody has to notice the
-drift by hand.
+An audit that fails takes trust away from that kind of action, as a rejection does
+(`actions.md`), so nobody has to notice the drift by hand.
 
 ## What's due
 
@@ -36,16 +35,18 @@ with `--as`.
 
 Read it as the person would, then check it against what it rests on:
 
-1. **Claims.** Every fact, number, price and promise, against the desk's sources and facts.
-   A rate we don't offer or a date nobody agreed is a fail.
-2. **Voice.** Would the person have written it like this (`voice.md`, the desk's lessons)?
-3. **Criteria and limits.** What the desk's `desk.md` says it may and may not do.
-4. **Holds.** Nothing it touched was held when it went.
-5. **What happened after.** The reply, the bounce, the page as it is now. Read the thread or
+1. **The draft.** Run `voice.md`'s draft checklist against what went out, and the desk's
+   lessons. Above all, nothing reserved for the person (money, contracts, legal points,
+   dates, commitments) without the facts and their say-so. A rate we don't offer or a date
+   nobody agreed is a fail.
+2. **Criteria and limits.** What the desk's `desk.md` says it may and may not do.
+3. **Holds.** Nothing it touched was held when it went.
+4. **What happened after.** The reply, the bounce, the page as it is now. Read the thread or
    fetch the page; don't trust the log alone.
 
-For a measure, read the number again at its source for the same period. For a task, check
-the proof meets its `done_when`.
+For a measure, read the number again the way it was defined: same source, same filters,
+same window (`changes.md`). Read any other way, a different number isn't a fail. For a task,
+check the proof meets its `done_when`.
 
 ## Write the verdict
 
