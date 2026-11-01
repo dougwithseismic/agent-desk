@@ -13,7 +13,7 @@ data it works on. In a Turborepo that's the repo root, beside `apps/` and `packa
 ```text
 desks/
   desk.mjs              the one script: every read and write goes through it (kit)
-  kit/                  core schema, playbooks and this guide (kit: replaced on update)
+  kit/                  core schema, playbooks, desk types and this guide (kit: replaced on update)
   .env                  DESK_USER, and DESK_DB + DESK_DB_TOKEN when hosted (never in git)
   .env.example
   data/                 the local database and private working files (never in git)
@@ -52,6 +52,7 @@ Needs: <environment variables the round uses>
 Mail: <the desk's own email addresses, if it answers mail>
 Round: <when its round is due, if it runs on a schedule: weekdays 09:00>
 Agent: <the name its agent works under, if it has one: gm>
+Type: <the kind of desk, when the database treats it differently: gm>
 
 ## Purpose
 What it's for, who it serves, who owns it, and what "working" looks like.
@@ -95,6 +96,11 @@ on the agent works with `--as gm`, so its work carries its own name and the data
 tell it from the person's say-so (what that changes is in the desk skill). Give it a name
 no person uses. Leave the line out and the agent works as the person. Add it once the desk
 works without a person in the chat.
+
+`Type:` is for a desk the database treats differently. `init` records it, and today one type
+means something: a `gm` desk prepares briefs and initiatives and nothing else. Types also
+come with a starting desk in `kit/types/<type>/`: its `desk.md`, `schema.sql`, playbooks and
+any files it needs, with blanks the setup conversation fills (`new-desk`).
 
 ## schema.sql: the desk's own tables
 

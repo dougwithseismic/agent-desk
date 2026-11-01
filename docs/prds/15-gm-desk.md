@@ -96,4 +96,69 @@ and spot checks a person can rely on.
 
 ## Implementation Notes
 
-(Filled in after it ships.)
+Built 1 Nov 2026 in the kit, in two parts: the guards first, then the type and its round.
+
+- **Desk types.** `Type:` in `desk.md` is read by `desksOnDisk`. It must name a folder in
+  `kit/types/`, and the desk must take the type's name (`desks/gm`), or init stops with a
+  fault. Every `init` records it in `desks.type` (core migration `002-desk-type.sql`), and
+  `doctor` checks it against the database once 002 is applied. Starting desks live in
+  `kit/types/<type>/`; `new-desk` copies one to `desks/<name>/` and fills its `<...>` blanks.
+- **Core guards**:
+  - `gm_briefs_only` refuses an action on a `gm` desk on any channel but `desk` or `gm`;
+  - `initiative_waits` refuses an auto send of a `gm`-channel action, however trusted, and
+    `action_insert` starts a `gm`-channel kind's trust as `always_human`, so `trust_board`
+    says "always a person";
+  - `action_agent_desk` refuses an agent an action on another desk. This is the same rule as
+    `task_agent_desk`, and it closed a gap found while building: an agent could prepare
+    actions on any desk.
+  - `ask_answered` refuses closing a question (a task with `source = 'ask'`) as done until a
+    `decision` about `task:<id>` is in the log under a name that isn't an agent's. It also
+    refuses changing such a task's source.
+  - `check_measured` and `check_kept`, for every desk: a verdict comes with its value,
+    `measured_at` and `measured_by`; a measured check keeps its measurement; a baseline once
+    taken stays. Notes and `check_at` can still change. A bet's verdict can't be rewritten
+    under it, and an unclear check is replaced, not edited (`changes.md` says so).
+- **`went_alone`** (core view): every auto-sent action with its latest audit, for the
+  person's brief ("since last time" is `sent_at` after the last brief's log row).
+  `audit_due` is now `went_alone` without an audit, from the last 14 days, plus `trouble`.
+  `briefs` gained `about`, so `gm_bet_board` counts a bet's open briefs through it.
+- **The GM type** (`kit/types/gm/`):
+  - `desk.md`: `revenue-28d`, `Agent: gm`, `Round: weekdays 08:30`,
+    `Needs: DESK_STRIPE_KEY` and `Type: gm`;
+  - `mandate.md` and `plan.md` (the funnel's steps are measures on the gm desk);
+  - `schema.sql` holds `gm_bets` with its stage log and three guards:
+    - a bet starts `proposed`;
+    - `running`, `checking`, `won` and `lost` need a check with a baseline, `won` needs
+      `better` and `lost` needs `worse` or `flat`;
+    - won, lost and dropped are final, check included.
+  - `gm_bet_board` lists open bets with their check, `check_due` (from `due`) and open
+    briefs (from `briefs`). A bet links to its check only; the initiative is found by
+    `about`.
+  - Four playbooks: `round.md`, `decide.md`, `brief.md` and `initiatives.md`.
+- **Numbered questions.** The person's brief records which task each number is, in a `note`
+  log row (`about = 'gm-brief:<date>'`, `details.questions` = task ids in order). "2 yes"
+  becomes a decision in their words, logged under `:person`, plus the task closed, in one write.
+- **Tests:**
+  - an end-to-end round in a throwaway project: the type copied from the kit, two desks and a
+    fake Stripe. It records the headline, lists the desks and finds the stuck one, audits from
+    `audit_due`, wins a bet on the same Stripe read, briefs through PRD 11 (waiting while
+    untrusted), pauses, proposes, asks, and closes "2 yes". It runs the playbooks' own SQL
+    examples, so the docs can't drift from the schema.
+  - focused tests for the bet guards, for questions and for checks. Every new guard and
+    view clause fails a test when removed (37 mutations across both parts and the clean-up,
+    all caught).
+- **Clean-up after review.** The GM's playbooks point at the kit's playbooks rather than
+  repeat them: the always-the-person's list lives only in `mandate.md`, criteria and limits
+  only in `desk.md`, claiming and holds in `actions.md` and `conversations.md`, audit cadence
+  in `audits.md`. The round reads stuck desks from `status --json` instead of its own query.
+  The brief's SQL takes named arguments, so the test runs it as written.
+- **Open:**
+  - A `Channels:` line in `desk.md` (the channels a desk may act on) would make the
+    briefs-only rule general rather than GM-specific. Not done: this PRD locked `Type:` and
+    migration 002. Worth it when a second type needs its own channel limits.
+  - The type comes from `desk.md`. An agent that edits the file and re-runs init lifts the
+    briefs-only rule: the guards stop mistakes, not deliberate acts.
+  - Any person can answer a question, not only its owner. That's on purpose: whoever is in
+    the GM's chat answers.
+  - The worked example `kit/guide/examples/gm.md` waits for the first real GM.
+  - Not run yet: hosted libSQL tests (no test database here) and a real Stripe account.

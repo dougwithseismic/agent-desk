@@ -4,6 +4,24 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-01
 
+### A GM desk runs the business towards money and runs the other desks (PRD 15) · New
+- Say "set up a GM" and `new-desk` starts from the GM type. It asks for the money goal and
+  target, what the GM may decide alone, a Stripe key (or test mode until there is one) and
+  the desks it runs. It writes a first commercial plan from the repo, then does one round
+  with you.
+- Each round, the GM records revenue and reads every desk. It audits what went out alone,
+  checks its bets and decides what the desks do next: at most three briefs, pauses for
+  what's failing, and new initiatives. It ends with your brief: the money against the
+  target, a line per desk, and numbered questions you answer "2 yes".
+- It briefs; it doesn't do. The database refuses any other action on a GM's desk, keeps every
+  initiative waiting for you, and closes a question only once your words are in the log.
+- A bet runs only on a check with a baseline, and ends won or lost only as the check says.
+- On every desk, a check now keeps its baseline once taken and what it measured once
+  measured, and a verdict comes with the measurement it rests on. To look again, add a new
+  check.
+- Desk types: `desks/kit/types/` holds starting desks for `new-desk`, and a `Type:` line in
+  `desk.md` says what kind a desk is. The GM is the first.
+
 ### A desk can read what the business earns from Stripe (PRD 14) · New
 - `node desks/desk.mjs stripe revenue` gives charges minus refunds over the last 28 days
   (or `--days`), with fees and what's left after them, per currency. `stripe mrr` gives

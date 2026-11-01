@@ -23,7 +23,11 @@ The database does the guarding. It refuses:
 - any edit of the log, or of an audit;
 - an audit of your own work;
 - an agent working under its own name approving, allowing, releasing someone else's hold,
-  loosening trust, or giving another desk a task other than through a brief.
+  loosening trust, or giving another desk a task other than through a brief;
+- a GM desk (`Type: gm`) doing anything but brief and propose, and an initiative going out
+  on its own;
+- a question for the person (a task with source `ask`) closed as done before their answer
+  is logged under their name.
 
 When it refuses, read the message and do what it says. Never work around it.
 
@@ -59,7 +63,9 @@ When it refuses, read the message and do what it says. Never work around it.
 | `voice.md` | Writing anything in the person's name |
 | `hosting.md` | Sharing the database between people or machines, tokens, backups |
 
-A desk's own `playbooks/` folder, if it has one, covers what it does differently.
+A desk's own `playbooks/` folder, if it has one, covers what it does differently. A GM
+desk's playbooks (`desks/gm/playbooks/`) are its round, its decisions, the person's brief
+and initiatives.
 
 ## The round
 

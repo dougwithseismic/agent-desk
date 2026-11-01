@@ -385,7 +385,8 @@ CREATE VIEW briefs AS
   SELECT a.desk AS from_desk, substr(a.target, 6) AS to_desk, a.id AS action_id, a.kind, a.title,
     a.status AS brief_status, t.id AS task_id, t.status AS task_status, t.owner, t.due, t.result,
     t.proof, a.created_at, t.done_at,
-    round(julianday(coalesce(t.done_at, 'now')) - julianday(coalesce(a.sent_at, a.created_at)), 1) AS days
+    round(julianday(coalesce(t.done_at, 'now')) - julianday(coalesce(a.sent_at, a.created_at)), 1) AS days,
+    a.about
   FROM actions a LEFT JOIN tasks t ON t.source = 'brief:' || a.id
   WHERE a.channel = 'desk';
 
@@ -464,14 +465,21 @@ CREATE VIEW trust_board AS
 -- What went out on its own in the last 14 days with no audit yet. trouble counts holds
 -- placed since on anything it touched: a bounce, a complaint or an opt-out becomes a hold.
 DROP VIEW IF EXISTS audit_due;
-CREATE VIEW audit_due AS
+DROP VIEW IF EXISTS went_alone;
+-- Everything that went out on its own, with its latest audit, if any. The GM's brief to the
+-- person reads what's new since the last one: WHERE sent_at > <the last brief's time>.
+CREATE VIEW went_alone AS
   SELECT a.desk, a.id, a.kind, a.channel, a.identity, a.target, a.title, a.status, a.sent_at,
-    (SELECT count(*) FROM hold_keys h WHERE h.at >= a.sent_at
-      AND h.key IN (SELECT key FROM action_touches t WHERE t.action_id = a.id)) AS trouble
+    u.verdict AS audit, u.id AS audit_id, u.by AS audited_by
   FROM actions a
-  WHERE a.mode = 'auto' AND a.status IN ('sent','verified','uncertain')
-    AND a.sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')
-    AND NOT EXISTS (SELECT 1 FROM audits u WHERE u.checked = 'action:' || a.id);
+  LEFT JOIN audits u ON u.id = (SELECT max(v.id) FROM audits v WHERE v.checked = 'action:' || a.id)
+  WHERE a.mode = 'auto' AND a.status IN ('sent','verified','uncertain');
+CREATE VIEW audit_due AS
+  SELECT w.desk, w.id, w.kind, w.channel, w.identity, w.target, w.title, w.status, w.sent_at,
+    (SELECT count(*) FROM hold_keys h WHERE h.at >= w.sent_at
+      AND h.key IN (SELECT key FROM action_touches t WHERE t.action_id = w.id)) AS trouble
+  FROM went_alone w
+  WHERE w.audit_id IS NULL AND w.sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days');
 
 -- Audits that failed or weren't sure, until a later audit of the same thing says otherwise.
 -- The GM's brief to the person carries these.
@@ -521,8 +529,8 @@ END;
 DROP TRIGGER IF EXISTS action_insert;
 CREATE TRIGGER action_insert AFTER INSERT ON actions
 BEGIN
-  INSERT OR IGNORE INTO trust(desk, kind, channel, identity)
-    VALUES (NEW.desk, NEW.kind, NEW.channel, NEW.identity);
+  INSERT OR IGNORE INTO trust(desk, kind, channel, identity, always_human)
+    VALUES (NEW.desk, NEW.kind, NEW.channel, NEW.identity, NEW.channel = 'gm');
   UPDATE actions SET
     first_title = NEW.title, first_body = NEW.body, first_payload = NEW.payload,
     last_by = coalesce(NEW.last_by, NEW.created_by),
@@ -899,6 +907,39 @@ BEGIN SELECT RAISE(ABORT, 'an initiative always waits for the person: show it an
 DROP TRIGGER IF EXISTS task_stays;
 CREATE TRIGGER task_stays BEFORE UPDATE OF desk ON tasks WHEN NEW.desk IS NOT OLD.desk
 BEGIN SELECT RAISE(ABORT, 'a task stays on its desk: drop it here and brief the other desk'); END;
+
+-- A check's verdict comes with the measurement it rests on. Once measured, a check is the
+-- record of what was seen, and a baseline once taken stays: to look again, add a new check.
+DROP TRIGGER IF EXISTS check_measured;
+CREATE TRIGGER check_measured BEFORE INSERT ON checks
+WHEN NEW.verdict IS NOT NULL AND (NEW.value IS NULL OR NEW.measured_at IS NULL OR NEW.measured_by IS NULL)
+BEGIN SELECT RAISE(ABORT, 'a verdict rests on a measurement: set value, measured_at and measured_by with it'); END;
+DROP TRIGGER IF EXISTS check_kept;
+CREATE TRIGGER check_kept BEFORE UPDATE OF metric, baseline, baseline_from, baseline_to, value, value_from,
+  value_to, verdict, source, measured_at, measured_by ON checks
+BEGIN
+  SELECT RAISE(ABORT, 'a measured check stays as it was measured: to look again, add a new check')
+    WHERE OLD.measured_at IS NOT NULL;
+  SELECT RAISE(ABORT, 'a baseline stays as it was taken: to start again, add a new check')
+    WHERE OLD.baseline IS NOT NULL AND (NEW.baseline IS NOT OLD.baseline OR NEW.metric IS NOT OLD.metric
+      OR NEW.baseline_from IS NOT OLD.baseline_from OR NEW.baseline_to IS NOT OLD.baseline_to);
+  SELECT RAISE(ABORT, 'a verdict rests on a measurement: set value, measured_at and measured_by with it')
+    WHERE NEW.verdict IS NOT NULL AND (NEW.value IS NULL OR NEW.measured_at IS NULL OR NEW.measured_by IS NULL);
+END;
+
+-- A question for the person is a task they own with source 'ask'. It's done when they've
+-- answered: their words are in the log as a decision about task:<id>, under their own name.
+-- It stays a question until then.
+DROP TRIGGER IF EXISTS ask_answered;
+CREATE TRIGGER ask_answered BEFORE UPDATE OF status, source ON tasks WHEN OLD.source = 'ask'
+BEGIN
+  SELECT RAISE(ABORT, 'a question stays a question: drop it if it no longer matters')
+    WHERE NEW.source IS NOT 'ask';
+  SELECT RAISE(ABORT, 'a question is done when the person has answered it: log their words as a decision about task:<id> under their name, then close it')
+    WHERE NEW.status = 'done' AND OLD.status IS NOT 'done'
+      AND NOT EXISTS (SELECT 1 FROM log g WHERE g.kind = 'decision' AND g.about = 'task:' || OLD.id
+        AND g.by NOT IN (SELECT name FROM agents));
+END;
 
 -- An audit is of something on that desk, by someone who didn't make, send or record it, and
 -- says what was found. A fail or unsure carries evidence. Audits never change.

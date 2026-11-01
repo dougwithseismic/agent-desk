@@ -570,6 +570,30 @@ test('due shows open tasks and changes ready to measure', async () => {
   assert.deepEqual(due.map((d) => `${d.type}:${d.what}`), ['check:measure clicks', 'task:now', 'task:overdue']);
 });
 
+test('a check keeps its baseline and what it measured, and a verdict comes with its measurement', async () => {
+  const p = await project();
+  const rests = /a verdict rests on a measurement: set value, measured_at and measured_by with it/;
+  await p.fails(`INSERT INTO checks(desk, about, metric, baseline, check_at, verdict, created_by)
+    VALUES ('seo', 'page:/a', 'clicks', 40, date('now'), 'better', :me)`, rests);
+  const id = (await p.one(`INSERT INTO checks(desk, about, metric, check_at, created_by)
+    VALUES ('seo', 'page:/a', 'clicks', date('now'), :me) RETURNING id`)).id;
+  await p.sql(`UPDATE checks SET baseline = 40, baseline_from = date('now', '-28 day'), baseline_to = date('now') WHERE id = ${id}`);
+  const taken = /a baseline stays as it was taken: to start again, add a new check/;
+  await p.fails(`UPDATE checks SET baseline = 30 WHERE id = ${id}`, taken);
+  await p.fails(`UPDATE checks SET metric = 'impressions' WHERE id = ${id}`, taken);
+  await p.fails(`UPDATE checks SET baseline_from = date('now', '-14 day') WHERE id = ${id}`, taken);
+  await p.fails(`UPDATE checks SET verdict = 'better' WHERE id = ${id}`, rests);
+  await p.fails(`UPDATE checks SET verdict = 'better', value = 55 WHERE id = ${id}`, rests);
+  await p.sql(`UPDATE checks SET value = 55, verdict = 'better', measured_at = :now, measured_by = :me WHERE id = ${id}`);
+  const kept = /a measured check stays as it was measured: to look again, add a new check/;
+  await p.fails(`UPDATE checks SET verdict = 'flat' WHERE id = ${id}`, kept);
+  await p.fails(`UPDATE checks SET value = 60 WHERE id = ${id}`, kept);
+  await p.fails(`UPDATE checks SET measured_at = NULL WHERE id = ${id}`, kept);
+  await p.sql(`UPDATE checks SET notes = 'a launch landed in the window', check_at = date('now', '+1 day') WHERE id = ${id}`);
+  assert.deepEqual(await p.one(`SELECT baseline, value, verdict, notes FROM checks WHERE id = ${id}`),
+    { baseline: 40, value: 55, verdict: 'better', notes: 'a launch landed in the window' });
+});
+
 test('status keeps long lists short: the newest holds and the first due, with how to see the rest', async () => {
   const p = await project();
   const holds = Array.from({ length: 14 }, (_, i) => `('seo', 'brand:b${i}', 'reason ${i}', 'doug')`).join(', ');
@@ -1586,11 +1610,12 @@ const desksForAudits = { seo: {}, gm: { agent: 'gm' } };
 const audit = (checked, verdict, o = {}) => `INSERT INTO audits(desk, checked, verdict, notes, evidence, by)
   VALUES (${q(o.desk ?? 'seo')}, ${q(checked)}, ${q(verdict)}, ${q(o.notes ?? 'read it against the thread')},
     ${q(o.evidence ?? '["mail:thread-1"]')}, ${o.by ? q(o.by) : ':me'}) RETURNING id`;
-async function trustedSeo(p) {
+// A kind the person has trusted and allowed to go on its own: seo's email replies, unless said.
+async function trusted(p, { desk = 'seo', kind = 'email-reply', channel = 'email', identity = 'doug@x.com' } = {}) {
+  const row = [desk, kind, channel, identity].map(q).join(', ');
   await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coach_needed, trusted, clean, last_by, note)
-      VALUES ('seo', 'email-reply', 'email', 'doug@x.com', 0, 1, 5, 'doug', 'trust its replies');
-    INSERT INTO allowed(desk, kind, channel, identity, words, by)
-      VALUES ('seo', 'email-reply', 'email', 'doug@x.com', 'let replies go', 'doug');`);
+      VALUES (${row}, 0, 1, 5, 'doug', 'trust it');
+    INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES (${row}, 'let it go', 'doug');`);
 }
 async function sentAlone(p, o = {}) {
   const id = await create(p, { status: 'draft', ...o });
@@ -1600,7 +1625,7 @@ async function sentAlone(p, o = {}) {
 
 test('an audit is of someone else\'s work, says what it found, and never changes', async () => {
   const p = await project(desksForAudits);
-  await trustedSeo(p);
+  await trusted(p);
   const mine = await sentAlone(p);
   const sams = await sentAlone(p, { by: 'sam' });
   await p.fails(audit(`action:${mine}`, 'pass'), /nobody audits their own work/);
@@ -1634,7 +1659,7 @@ test('an audit is of someone else\'s work, says what it found, and never changes
 
 test('a failed audit takes trust away and says why; audit_due lists what went out alone', async () => {
   const p = await project(desksForAudits);
-  await trustedSeo(p);
+  await trusted(p);
   const [a1, a2] = [await sentAlone(p), await sentAlone(p)];
   const a3 = await sentAlone(p, { target: 'email:sam@beta.com', about: 'brand:beta' });
   const shown = await create(p);
@@ -1921,9 +1946,7 @@ test('a GM desk briefs and proposes, and only a person starts an initiative', as
   assert.ok(await create(p, { desk: 'partners' }), 'the person still works any desk without an agent');
   assert.ok(await create(p, briefAction({ by: 'gm' })));
 
-  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coached, clean, trusted, last_by, note)
-      VALUES ('gm', 'initiative', 'gm', 'gm', 2, 5, 1, 'doug', 'start what you like');
-    INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('gm', 'initiative', 'gm', 'gm', 'go ahead', 'doug')`);
+  await trusted(p, { desk: 'gm', kind: 'initiative', channel: 'gm', identity: 'gm' });
   const alone = await create(p, initiative({ status: 'draft' }));
   await p.fails(claim(alone, 'auto', 'gm'), /an initiative always waits for the person: show it and ask/);
   const shown = await create(p, initiative({ status: 'waiting' }));
@@ -1947,7 +1970,13 @@ test('a desk\'s type comes from its Type: line, and doctor says when init hasn\'
   fs.writeFileSync(md, text.replace('Type: gm', 'Type: general manager'));
   const bad = await p.run(['init']);
   assert.equal(bad.code, 1);
-  assert.match(bad.err, /desks\/gm\/desk.md: Type: general manager is not a type: use one word, such as gm/);
+  assert.match(bad.err, /desks\/gm\/desk.md: Type: general manager is not a kit type: use one of gm \(desks\/kit\/types\/\)/);
+  fs.writeFileSync(md, text);
+  const pmd = path.join(p.dir, 'desks/partners/desk.md');
+  fs.writeFileSync(pmd, fs.readFileSync(pmd, 'utf8').replace('\n\n## Purpose', '\nType: gm\n\n## Purpose'));
+  const named = await p.run(['init']);
+  assert.equal(named.code, 1);
+  assert.match(named.err, /desks\/partners\/desk.md: Type: gm is for desks\/gm: a desk made from a type takes its name/);
 });
 
 test('a database from before migration 002 gets desk types once', async () => {
@@ -1960,4 +1989,182 @@ test('a database from before migration 002 gets desk types once', async () => {
   assert.doesNotMatch((await p.run(['init'])).out, /Applied/);
   assert.equal((await p.one("SELECT type FROM desks WHERE name = 'gm'")).type, 'gm');
   await p.fails(newAction({ desk: 'gm', identity: 'gm' }), /a GM briefs/);
+});
+
+// The GM type as new-desk sets it up: copied from kit/types/gm, its target filled in, with two
+// desks beside it.
+async function gmProject() {
+  const p = await project({ partners: {}, seo: {} }, { init: false });
+  fs.cpSync(path.join(p.dir, 'desks/kit/types/gm'), path.join(p.dir, 'desks/gm'), { recursive: true });
+  const md = path.join(p.dir, 'desks/gm/desk.md');
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace(/^Target: .*$/m, 'Target: 9,000 USD in 28 days by March'));
+  const init = await p.run(['init']);
+  assert.equal(init.code, 0, init.err);
+  return p;
+}
+// The SQL examples in each of the GM's playbooks, in order, so the tests run what the agent reads.
+const gmSql = Object.fromEntries(['round.md', 'decide.md', 'brief.md', 'initiatives.md'].map((file) => [file,
+  [...fs.readFileSync(path.join(KIT, 'kit/types/gm/playbooks', file), 'utf8').matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1])]));
+// A check with its baseline, and a question for the person, as the GM writes them.
+const gmCheck = async (p, baseline, about = 'bet:x') => (await p.one(`INSERT INTO checks(desk, about, metric, baseline, check_at, created_by)
+  VALUES ('gm', ${q(about)}, 'revenue-28d', ${baseline}, date('now'), :me) RETURNING id`, gm)).id;
+const gmAsk = async (p, what) => (await p.one(`INSERT INTO tasks(desk, what, owner, done_when, source, created_by)
+  VALUES ('gm', ${q(what)}, :person, 'they answer yes or no', 'ask', :me) RETURNING id`, gm)).id;
+
+test('a GM round, in a project with two desks and a fake Stripe', async () => {
+  const data = stripeData();
+  const s = await fakeStripe(data);
+  const p = await gmProject();
+  const asGm = (...args) => p.run([...args, '--as', 'gm'], { env: s.env });
+
+  // The type as it comes: its plan, its agent and its table, and doctor is content with a key.
+  assert.deepEqual(await p.one("SELECT type, headline, target FROM desks WHERE name = 'gm'"),
+    { type: 'gm', headline: 'revenue-28d', target: '9,000 USD in 28 days by March' });
+  assert.deepEqual(await p.sql('SELECT name, desk FROM agents'), [{ name: 'gm', desk: 'gm' }]);
+  const doctor = await p.run(['doctor'], { env: s.env });
+  assert.equal(doctor.code, 0, doctor.out);
+
+  // 1. Money: the headline, recorded by the GM.
+  const rec = await asGm('stripe', 'revenue', '--days', '28', '--currency', 'usd', '--record', 'revenue-28d', '--desk', 'gm');
+  assert.equal(rec.code, 0, rec.err);
+  assert.deepEqual(await p.one("SELECT m.by, b.value FROM board b JOIN measures m ON m.desk = b.desk WHERE b.desk = 'gm'"),
+    { by: 'gm', value: 50 });
+
+  // 2. Every desk: partners has work due and nobody listening.
+  await p.sql("INSERT INTO tasks(desk, what, created_by) VALUES ('partners', 'answer Jo at Acme', 'doug')");
+  const st = JSON.parse((await asGm('status', '--json')).out);
+  assert.deepEqual(st.board.map((b) => [b.desk, b.due]), [['gm', 0], ['partners', 1], ['seo', 0]]);
+  const heard = new Set(st.listening.filter((l) => l.by).map((l) => l.desk));
+  assert.deepEqual(st.board.filter((b) => (b.due || b.waiting) && !heard.has(b.desk)).map((b) => b.desk), ['partners']);
+
+  // 3. Audits: what seo sent alone, from audit_due, checked by the GM. What a person sent isn't there.
+  await trusted(p);
+  const alone = await sentAlone(p);
+  await p.sql(humanSend(await create(p)));
+  assert.deepEqual((await p.sql('SELECT id FROM audit_due', gm)).map((r) => r.id), [alone]);
+  await p.sql(audit(`action:${alone}`, 'pass'), gm);
+  assert.deepEqual(await p.sql('SELECT id, audit, audited_by FROM went_alone', gm), [{ id: alone, audit: 'pass', audited_by: 'gm' }]);
+  assert.equal((await p.sql('SELECT * FROM audit_due')).length, 0);
+
+  // 4. Bets: one runs on a check with its baseline, and the same read later says better.
+  const [bet, proposal] = gmSql['initiatives.md'];
+  await p.sql(bet, gm);
+  const customers = async () => JSON.parse((await asGm('stripe', 'customers', '--days', '28', '--record', 'customers-28d', '--desk', 'gm')).out).recorded.value;
+  const base = await customers();
+  const check = (await p.one(`INSERT INTO checks(desk, about, metric, baseline, baseline_from, baseline_to, check_at, source, created_by)
+    VALUES ('gm', 'bet:affiliates', 'customers-28d', ${base}, date('now', '-28 day'), date('now'), date('now'), 'stripe customers --days 28', :me)
+    RETURNING id`, gm)).id;
+  await p.sql(`UPDATE gm_bets SET stage = 'running', check_id = ${check}, last_by = :me WHERE key = 'bet:affiliates'`, gm);
+  const [board, won] = gmSql['round.md'];
+  const [row] = await p.sql(board, gm);
+  assert.deepEqual([row.key, row.stage, row.baseline, row.check_due], ['bet:affiliates', 'running', 2, 1]);
+  data.customers.push({ id: 'cus_c', object: 'customer', created: ago(1) });
+  const now = await customers();
+  assert.equal(now, 3);
+  await p.sql(`UPDATE checks SET value = ${now}, verdict = 'better', measured_at = :now, measured_by = :me WHERE id = ${check};
+    ${won.replace('bet:annual-plan', 'bet:affiliates')}`, gm);
+  assert.deepEqual(await p.one("SELECT stage FROM gm_bets"), { stage: 'won' });
+
+  // 5. Decide: a brief waits for the person while briefs aren't trusted; a pause and an
+  // initiative go in as the playbook writes them.
+  const b = await create(p, briefAction({ by: 'gm', status: 'draft' }));
+  const untrusted = await asGm('send', String(b));
+  assert.equal(untrusted.code, 1);
+  assert.match(untrusted.err, /coached examples always go to a person/);
+  assert.equal((await p.sql('SELECT * FROM tasks WHERE source LIKE \'brief:%\'')).length, 0);
+  await p.sql(`UPDATE actions SET status = 'waiting', last_by = :me WHERE id = ${b}`, gm);
+  await p.sql(approve(b));
+  const sent = await asGm('send', String(b));
+  assert.equal(sent.code, 0, sent.err);
+  assert.deepEqual(await p.one(`SELECT desk, status FROM tasks WHERE source = 'brief:${b}'`), { desk: 'partners', status: 'open' });
+  await p.sql(gmSql['decide.md'][0], gm);
+  await p.sql(proposal, { ...gm, args: { body: 'Pay the creators who already send us customers.' } });
+  assert.deepEqual(await p.sql("SELECT desk, kind FROM waiting WHERE desk = 'gm'"), [{ desk: 'gm', kind: 'initiative' }]);
+  assert.deepEqual(await p.one("SELECT stage FROM trust_board WHERE kind = 'initiative'"), { stage: 'always a person' });
+
+  // 6. The person's brief: two questions as tasks they own, numbered in the log; "2 yes".
+  const [ask, note, find, answer] = gmSql['brief.md'];
+  await p.sql(ask, gm);
+  await gmAsk(p, 'Start the affiliate program? Yes: I brief a builder. No: it stays a bet.');
+  const asks = (await p.sql("SELECT id, owner, created_by FROM tasks WHERE source = 'ask' ORDER BY id", gm));
+  assert.deepEqual(asks.map((t) => [t.owner, t.created_by]), [['doug', 'gm'], ['doug', 'gm']]);
+  await p.sql(note, { ...gm, args: { questions: JSON.stringify(asks.map((t) => t.id)) } });
+  const { task } = await p.one(find, gm);
+  assert.equal(task, asks[1].id);
+  await p.sql(answer, { ...gm, args: { task, words: '"2 yes"' } });
+  const said = await p.one(`SELECT g.by, g.summary, t.status, t.proof = 'log:' || g.id AS proved FROM tasks t, log g
+    WHERE t.id = ${task} AND g.kind = 'decision'`);
+  assert.deepEqual(said, { by: 'doug', summary: '"2 yes"', status: 'done', proved: 1 });
+  assert.equal((await p.one(`SELECT status FROM tasks WHERE id = ${asks[0].id}`)).status, 'open');
+});
+
+test('a bet starts proposed, runs on a check with a baseline, and ends only as its check says', async () => {
+  const p = await gmProject();
+  const bet = (key, stage) => `INSERT INTO gm_bets(key, what, why, expects${stage ? ', stage' : ''}, last_by)
+    VALUES ('${key}', 'Show annual pricing first', 'most buyers pick annual', 'revenue-28d up 10%'${stage ? `, '${stage}'` : ''}, :me)`;
+  const move = (key, stage, also = '') => `UPDATE gm_bets SET stage = '${stage}'${also}, last_by = :me WHERE key = '${key}'`;
+  const check = (baseline) => gmCheck(p, baseline);
+  const measure = (id, value, verdict) => `UPDATE checks SET value = ${value}, verdict = '${verdict}', measured_at = :now, measured_by = :me WHERE id = ${id}`;
+
+  await p.fails(bet('bet:x', 'running'), /a bet starts as proposed, then runs once its check has a baseline/, gm);
+  await p.sql(bet('bet:x'), gm);
+  await p.fails(move('bet:x', 'running'), /a bet runs with a check: record its baseline in checks and set check_id/, gm);
+  await p.fails(move('bet:x', 'running', `, check_id = ${await check('NULL')}`), /a bet runs with a check/, gm);
+  const c = await check(5000);
+  await p.sql(move('bet:x', 'running', `, check_id = ${c}`), gm);
+
+  // Its briefs count on the board while they're open.
+  const b = await create(p, briefAction({ by: 'gm', about: 'bet:x' }));
+  await p.sql(approve(b));
+  assert.equal((await p.run(['send', String(b), '--as', 'gm'])).code, 0);
+  const [row] = await p.sql('SELECT stage, check_due, open_briefs FROM gm_bet_board');
+  assert.deepEqual(row, { stage: 'running', check_due: 1, open_briefs: 1 });
+
+  await p.fails(move('bet:x', 'won'), /a bet is won when its check says better: measure it first/, gm);
+  await p.fails(move('bet:x', 'lost'), /a bet is lost when its check says worse or flat: measure it first/, gm);
+  await p.sql(measure(c, 5100, 'unclear'), gm);
+  await p.fails(move('bet:x', 'won'), /won when its check says better/, gm);
+  await p.fails(move('bet:x', 'lost'), /lost when its check says worse or flat/, gm);
+  const longer = await check(5000);
+  await p.sql(`${measure(longer, 5000, 'flat')}; UPDATE gm_bets SET check_id = ${longer}, last_by = :me WHERE key = 'bet:x'`, gm);
+  await p.fails(move('bet:x', 'won'), /won when its check says better/, gm);
+  await p.sql(move('bet:x', 'lost'), gm);
+  await p.fails(move('bet:x', 'running'), /won, lost and dropped are final: a new try is a new bet/, gm);
+  const other = await check(4000);
+  await p.sql(measure(other, 3000, 'worse'), gm);
+  await p.fails(move('bet:x', 'lost', `, check_id = ${other}`), /won, lost and dropped are final/, gm);
+
+  const log = await p.sql("SELECT by, summary FROM log WHERE about = 'bet:x' AND summary LIKE 'bet:x:%' ORDER BY id");
+  assert.deepEqual(log, [{ by: 'gm', summary: 'bet:x: proposed > running' }, { by: 'gm', summary: 'bet:x: running > lost' }]);
+  assert.equal((await p.sql('SELECT * FROM gm_bet_board')).length, 0);
+
+  // A bet that never ran can be dropped, and that's final too.
+  await p.sql(`${bet('bet:y')}; ${move('bet:y', 'dropped')}`, gm);
+  await p.fails(move('bet:y', 'proposed'), /won, lost and dropped are final/, gm);
+});
+
+test('a question for the person closes only once their own words are in the log', async () => {
+  const p = await gmProject();
+  const ask = (what) => gmAsk(p, what);
+  const said = (id, by, kind = 'decision') => `INSERT INTO log(desk, by, kind, about, summary) VALUES ('gm', ${by}, '${kind}', 'task:${id}', '"1 yes"')`;
+  const close = (id) => `UPDATE tasks SET status = 'done', done_at = :now, result = 'yes' WHERE id = ${id}`;
+  const answered = /a question is done when the person has answered it: log their words as a decision about task:<id> under their name/;
+
+  const first = await ask('Start the affiliate program?');
+  const second = await ask('Raise the annual price?');
+  await p.fails(close(first), answered, gm);
+  await p.sql(said(first, ':me'), gm);
+  await p.fails(close(first), answered, gm);
+  await p.sql(said(first, ':person', 'note'), gm);
+  await p.fails(close(first), answered, gm);
+  await p.sql(said(first, ':person'), gm);
+  await p.fails(close(second), answered, gm);
+  await p.fails(`UPDATE tasks SET source = NULL WHERE id = ${second}`, /a question stays a question: drop it if it no longer matters/, gm);
+  await p.sql(close(first), gm);
+  assert.equal((await p.one(`SELECT status FROM tasks WHERE id = ${first}`)).status, 'done');
+
+  // A question that no longer matters is dropped, and other tasks close as they always have.
+  await p.sql(`UPDATE tasks SET status = 'dropped', result = 'the launch moved to spring' WHERE id = ${second}`, gm);
+  const other = (await p.one("INSERT INTO tasks(desk, what, created_by) VALUES ('gm', 'read the funnel', :me) RETURNING id", gm)).id;
+  await p.sql(close(other), gm);
 });

@@ -48,6 +48,9 @@ Don't assume the domain from the project's name.
   or CMS? Then read from there; don't copy it all into the desk.
 - **Other desks in this project.** Share their people, contacts, holds and log; don't
   duplicate them.
+- **Types.** `desks/kit/types/` holds starting desks with blanks to fill. `gm` is the desk
+  that runs a business towards money and runs its other desks ("A GM" below). Start from a
+  type when one fits; the desk you make from it is theirs to change.
 
 ## 3. Propose the desk
 
@@ -66,6 +69,9 @@ Ask for the one decision that matters. Adjust, then build. Don't present a
 questionnaire.
 
 ## 4. Build it
+
+From a type, copy `desks/kit/types/<type>/` to `desks/<name>/` and fill every `<...>` blank
+with what they told you, then check each step below against it.
 
 1. `desks/<name>/desk.md`: the one-page plan in the anatomy format. Include the
    `Headline:`, `Target:` and `Needs:` lines, a `Mail:` line if it talks by email, a
@@ -98,6 +104,30 @@ Cloudflare change: the subdomain's DNS, routing, Email Sending, the database, se
 a deploy. Until it's set up, the desk can still be built; its mail steps wait. To try the
 desk's mail first with nothing on Cloudflare, run the Worker on this machine (the README's
 "Running it locally").
+
+## A GM
+
+A GM runs the business towards money and runs the other desks: `desks/kit/types/gm/desk.md`
+says what it does. Its desk is `desks/gm`, copied from that type.
+
+Set it up in the same conversation, one thing at a time:
+
+- **The money goal and target.** What should be different, in their words, and the number:
+  `revenue-28d`, or `mrr` for a subscription business, with a target and a date.
+- **The mandate** (`mandate.md`): what it may decide alone, its budget (0 unless they set
+  one), and what always stays with them. Read them the always-human list and ask what to add.
+- **Stripe.** A restricted read key in `desks/.env`, written by them (`revenue.md`). With no
+  key yet, a test key (`rk_test_` or `sk_test_`) lets the GM run on test data until there is
+  one; say its numbers aren't the business's.
+- **The desks it runs.** The desks in this project it may brief, a line each in
+  `mandate.md`. A desk it should run but that doesn't exist yet is an initiative for later,
+  not something to build now.
+- **A first `plan.md`**, written from what's in the repo: the pricing page and Stripe prices,
+  the docs, where analytics and sign-ups are read. Leave a blank where you can't find a
+  source, and say so.
+
+Then `init`, `doctor`, and one round with them (`playbooks/round.md`), ending with their
+first brief. Its questions are how you check the mandate is right.
 
 ## 5. Do one real round
 

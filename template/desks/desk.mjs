@@ -466,6 +466,8 @@ function sha(text) {
 // weekdays 09:00), Agent: (the name its agent works under) and Type: (the kind of desk it
 // started as, from kit/types/: a gm desk only briefs).
 function desksOnDisk() {
+  let types = [];
+  try { types = fs.readdirSync(path.join(KIT, 'types')); } catch {}
   return fs.readdirSync(DESKS, { withFileTypes: true })
     .filter((d) => d.isDirectory() && fs.existsSync(path.join(DESKS, d.name, 'desk.md')))
     .map((d) => {
@@ -486,10 +488,15 @@ function desksOnDisk() {
         type: field('Type')?.toLowerCase(),
       };
     })
-    .map((d) => ({ ...d, fault: d.agent && !isWord(d.agent) ? `desks/${d.name}/desk.md: Agent: ${d.agent} is not a name: use letters, digits and dashes, such as gm`
-      : d.agent && isPerson(d.agent) ? `desks/${d.name}/desk.md: Agent: ${d.agent} is you (DESK_USER): the database can't tell your say-so from its work, so give the agent a name of its own`
-        : d.type && !isWord(d.type) ? `desks/${d.name}/desk.md: Type: ${d.type} is not a type: use one word, such as gm`
-          : null }));
+    .map((d) => {
+      const at = `desks/${d.name}/desk.md`;
+      const fault = d.agent && !isWord(d.agent) ? `${at}: Agent: ${d.agent} is not a name: use letters, digits and dashes, such as gm`
+        : d.agent && isPerson(d.agent) ? `${at}: Agent: ${d.agent} is you (DESK_USER): the database can't tell your say-so from its work, so give the agent a name of its own`
+        : d.type && !types.includes(d.type) ? `${at}: Type: ${d.type} is not a kit type: use one of ${types.join(', ') || '(none)'} (desks/kit/types/)`
+        : d.type && d.type !== d.name ? `${at}: Type: ${d.type} is for desks/${d.type}: a desk made from a type takes its name`
+        : null;
+      return { ...d, fault };
+    });
 }
 
 // Addresses in more than one desk's Mail: line, with the desks that claim them.
@@ -1453,15 +1460,14 @@ async function doctor() {
       for (const f of migrationFiles(path.join(KIT, 'migrations'))) {
         if (!applied.has(`core/${f}`)) bad(`core migration ${f} not applied: run node desks/desk.mjs init`);
       }
-      let types = new Map();
-      try { types = new Map((await execute(db, 'SELECT name, type FROM desks')).results[0].rows); } catch {}
-      const known = new Set((await execute(db, 'SELECT name FROM desks')).results[0].rows.map((r) => r[0]));
+      const typed = applied.has('core/002-desk-type.sql');
+      const known = new Map((await execute(db, `SELECT name, ${typed ? 'type' : 'NULL'} FROM desks`)).results[0].rows);
       let agents = new Set();
       try { agents = new Set((await execute(db, "SELECT name || '/' || desk FROM agents")).results[0].rows.map((r) => r[0])); } catch {}
       for (const desk of disk) {
         if (!known.has(desk.name)) { bad(`${desk.name}: not in the database yet: run init`); continue; }
         if (desk.agent && !agents.has(`${desk.agent}/${desk.name}`)) bad(`${desk.name}: Agent: ${desk.agent} is not in the database yet: run init`);
-        if (types.size && (types.get(desk.name) ?? null) !== (desk.type ?? null)) bad(`${desk.name}: Type: ${desk.type ?? '(none)'} is not in the database yet: run init`);
+        if (typed && (known.get(desk.name) ?? null) !== (desk.type ?? null)) bad(`${desk.name}: Type: ${desk.type ?? '(none)'} is not in the database yet: run init`);
         const schemaFile = path.join(desk.dir, 'schema.sql');
         if (fs.existsSync(schemaFile) && applied.get(`${desk.name}/schema.sql`) !== sha(fs.readFileSync(schemaFile, 'utf8'))) {
           bad(`${desk.name}: schema.sql changed since the last init: run init (a changed column needs a file in ${desk.name}/migrations/)`);

@@ -49,13 +49,21 @@ business earns from Stripe with a restricted, read-only key in `desks/.env`, and
 sends GETs and refuses a live secret key: changes in Stripe stay with a person
 (`desks/kit/playbooks/revenue.md`).
 
+### A GM that runs the other desks
+
+Say "set up a GM" and `new-desk` starts from the GM type (`desks/kit/types/gm`). The GM runs
+the business towards a money target and runs the other desks. Each round it records revenue
+from Stripe and reads every desk. It audits what went out alone, checks its bets, and briefs
+the desks on what to do next. Then it writes you one brief with yes-or-no questions. It
+briefs; it doesn't do (see the guards below).
+
 ## What lands in a project
 
 ```text
 desks/
   desk.mjs          the one script: init, status, sql, lock, take, export, dump, doctor,
                     watch, mail and send for desks that answer mail, and stripe
-  kit/              core schema, playbooks, guide and worked examples (replaced on update)
+  kit/              core schema, playbooks, desk types, guide and worked examples (replaced on update)
   .env              DESK_USER, and the hosted database's address and token (never in git)
   data/             the local database and private files (never in git)
   seo/              a desk: desk.md, schema.sql, migrations/, playbooks/ (yours)
@@ -106,6 +114,11 @@ needs the person's name and their words, and goes in the log.
 
 Trusted work that went out alone gets audited by someone who didn't do it: another desk's
 agent, such as a GM, or the person. Nobody audits their own work, and an audit never changes.
+
+A GM desk (`Type: gm`) prepares briefs and initiatives and nothing else, and an initiative
+never goes out on its own. A question for the person (a task with source `ask`) closes as
+done only once their answer is in the log, under their name. A GM's bet runs only on a
+check with a baseline, and ends won or lost only as that check says.
 
 These guards stop mistakes. They aren't security: an agent that writes a person's name on
 purpose isn't stopped, and anyone with the database can change it.

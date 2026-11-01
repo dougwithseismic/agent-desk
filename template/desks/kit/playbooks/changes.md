@@ -54,6 +54,9 @@ the measure is missing for that period.
    WHERE id = 9;
    ```
 
+   A measured check stays as it was measured, and a baseline stays as it was taken. To look
+   again, say after an `unclear`, add a new check.
+
 7. **Learn.** A clear win or loss is a lesson for the next change of that kind ("question
    titles beat 'best X' titles on store pages"). A loss may mean preparing the reverse
    change.
