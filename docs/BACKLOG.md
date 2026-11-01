@@ -74,7 +74,7 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
 - [~] (kit built 2026-11-01; not yet tried live in a project) **PRD 16** The GM starts desks' sessions, and a watchdog for stalled work
       (`docs/prds/16-sessions.md`). Needs 15. The watchdog view can land before the rest.
       (needs you: a yes to create scheduled tasks in a project, and the mode they run in)
-- [~] (building since 2026-11-01, autopilot) **PRD 17** The affiliates desk type: recruit, onboard and pay affiliates
+- [~] (kit built 2026-11-01; not yet run against a real affiliate program, which waits on 19) **PRD 17** The affiliates desk type: recruit, onboard and pay affiliates
       (`docs/prds/17-affiliates-desk.md`). Needs 15.
 - [~] (pushed to the starter's main 2026-11-01; not yet run against Stripe test keys) **PRD 18** Starter: Stripe billing per organisation (`docs/prds/18-starter-billing.md`).
 - [ ] **PRD 19** Starter: the affiliate program (`docs/prds/19-starter-affiliates.md`).
