@@ -96,6 +96,9 @@ database refuses an agent that approves, allows work to go alone, releases someo
 hold, loosens trust, or gives another desk a task other than through a brief. Loosening trust
 needs the person's name and their words, and goes in the log.
 
+Trusted work that went out alone gets audited by someone who didn't do it: another desk's
+agent, such as a GM, or the person. Nobody audits their own work, and an audit never changes.
+
 These guards stop mistakes. They aren't security: an agent that writes a person's name on
 purpose isn't stopped, and anyone with the database can change it.
 
@@ -105,7 +108,7 @@ Trust is earned per kind of action, channel and identity:
 2. five clean approved ones;
 3. then trusted, with every fifth action shown in full as a spot check.
 
-An edit or a refusal resets trust. Kinds marked always-human never get trust.
+An edit, a refusal or a failed audit resets trust. Kinds marked always-human never get trust.
 
 Locks show who is working on what. `take` hands a lock over without asking, and the log
 records the takeover.

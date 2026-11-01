@@ -50,4 +50,37 @@ that drifts loses its freedom without anyone having to notice by hand.
 
 ## Implementation Notes
 
-(Filled in after it ships.)
+Built 1 Nov 2026 in the kit: a new core table and triggers in `core.sql`, no migration.
+
+- **`audits`**: desk, `checked` (`action:<id>`, `measure:<id>`, `task:<id>`), verdict, notes,
+  evidence (a JSON list), by, at. `audit_written` reads the view `audited_work` (each
+  action, measure and task with who made or sent it) and refuses an audit of something that isn't
+  on that desk, one by whoever created or sent the action / recorded the measure / created
+  the task, blank notes, evidence that isn't a list, and a fail or unsure with no evidence.
+  `audit_no_update` and `audit_no_delete` keep it append only; a later audit of the same
+  thing supersedes an earlier one.
+- **A fail on an action** (`audit_failed_resets_trust`) resets that kind's trust as a
+  rejection does and logs a `trust` row with `ref = 'audit:<id>'`, by the auditor, naming the
+  audit and its notes. It resets whatever stage the action was in, and for human-sent
+  actions too.
+- **`audit_due`**: actions with mode `auto`, status sent, verified or uncertain, in the last
+  14 days, with no audit. `trouble` counts holds placed since on any key the action
+  touches (through a new `hold_keys` view, which `active_hold_keys` now builds on) (bounces, complaints and opt-outs become holds), and those sort first. "Negative
+  reply" isn't detected beyond that: the inbox has no sentiment, so the playbook asks the
+  auditor to read the thread.
+- **`audit_findings`** is the GM's brief view from criterion 5: fails and unsures whose
+  newest audit is still a fail or unsure. PRD 15's brief reads it.
+- `status` adds "N sent alone, not audited (M with trouble since)" per desk and an audit
+  findings section; `--json` has `audits_due` and `audit_findings`.
+- A desk without an `Agent:` works as the person, so the person can't audit it: another
+  desk's agent (the GM) does. The playbook says so.
+- Views carry no ORDER BY; `status` and the playbook order their own queries.
+- Each guard and view clause fails a test when removed (mutations rechecked after simplify).
+- Review fix: the own-work check first looked the id up with a cast alone, so `task:123`
+  also matched action 3. Each lookup now compares the whole ref (`'task:' || id`), and a
+  test covers it.
+- **Open.** Not run against hosted libSQL (same gap as PRD 12). The SQL uses `json_type`
+  and `json_array_length`, which libSQL has. The reset UPDATE is a third copy of the
+  rejection one; triggers can't share a body. `audit_due` works out `trouble` per listed
+  row through `action_touches`; fine for 14 days of auto sends, worth a look if a desk
+  sends thousands alone.

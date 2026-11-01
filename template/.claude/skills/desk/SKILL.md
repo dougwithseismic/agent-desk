@@ -20,7 +20,8 @@ The database does the guarding. It refuses:
 - an approval of a version the person didn't see;
 - anything while someone else holds the lock, or while a hold applies;
 - changing what was already attempted;
-- any edit of the log;
+- any edit of the log, or of an audit;
+- an audit of your own work;
 - an agent working under its own name approving, allowing, releasing someone else's hold,
   loosening trust, or giving another desk a task other than through a brief.
 
@@ -53,6 +54,7 @@ When it refuses, read the message and do what it says. Never work around it.
 | `conversations.md` | People, inboxes, threads, promises, follow-ups, do-not-contact |
 | `changes.md` | Changing something and measuring it later: baselines, checks, verdicts, the headline |
 | `briefs.md` | Handing work to another desk, or taking on a task whose source is `brief:<id>` |
+| `audits.md` | Checking another desk's work that went out alone, or a number it reported |
 | `voice.md` | Writing anything in the person's name |
 | `hosting.md` | Sharing the database between people or machines, tokens, backups |
 

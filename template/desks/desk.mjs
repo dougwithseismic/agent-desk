@@ -606,16 +606,19 @@ async function status(flags, deskName) {
     SELECT to_desk AS desk, count(*) AS open, max(days) AS oldest_days FROM briefs
       WHERE task_status = 'open' AND (:d IS NULL OR to_desk = :d) GROUP BY to_desk;
     SELECT name, desk, for_whom FROM agents WHERE ${f()} ORDER BY desk, name;
+    SELECT desk, count(*) AS due, sum(trouble > 0) AS trouble FROM audit_due WHERE ${f()} GROUP BY desk;
+    SELECT id, desk, checked, verdict, notes, by FROM audit_findings WHERE ${f()} ORDER BY id DESC;
   `, v);
   if (flags.json) {
-    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening', 'briefs', 'agents'];
+    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening', 'briefs', 'agents', 'audits_due', 'audit_findings'];
     console.log(JSON.stringify(Object.fromEntries(results.map((r, i) => [names[i], asObjects(r.cols, r.rows)])), null, 2));
     db.close();
     return;
   }
-  const [board, waiting, due, flight, locks, holds, trust, lessons, listening, briefs, agents] = results;
+  const [board, waiting, due, flight, locks, holds, trust, lessons, listening, briefs, agents, auditsDue, findings] = results;
   const heard = new Map(listening.rows.map(([d, by, , looked]) => [d, { by, looked }]));
   const briefed = new Map(briefs.rows.map(([d, n, days]) => [d, { n, days }]));
+  const unaudited = new Map(auditsDue.rows.map(([d, n, trouble]) => [d, { n, trouble }]));
   const you = AGENT ? `${AGENT}, an agent working for ${PERSON ?? '(DESK_USER not set)'}` : USER ?? '(DESK_USER not set)';
   console.log(`${HOSTED ? 'Hosted' : 'Local'} database ${db.where}, you are ${you}.`);
   if (!board.rows.length) console.log(desk ? `No desk called ${desk}: run init after adding desks/${desk}/desk.md.` : 'No desks yet.');
@@ -626,6 +629,8 @@ async function status(flags, deskName) {
     if (l) bits.push(`${l} locked`);
     const br = briefed.get(name);
     if (br) bits.push(`${br.n} brief${br.n === 1 ? '' : 's'} open, oldest ${ago(br.days * 86400000)}`);
+    const au = unaudited.get(name);
+    if (au) bits.push(`${au.n} sent alone, not audited${au.trouble ? ` (${au.trouble} with trouble since)` : ''}`);
     const ear = heard.get(name);
     if (ear) bits.push(listeningNow(ear));
     let line = `${name}: ${bits.join(' · ')}`;
@@ -648,6 +653,7 @@ async function status(flags, deskName) {
   section('Locks', locks);
   section(`Holds (${holds.rows.length}, newest first)`, holds, 10, `SELECT * FROM active_holds${desk ? ` WHERE desk IS NULL OR desk = '${desk.replace(/'/g, "''")}'` : ''}`);
   section('Trust', trust);
+  section('Audit findings (failed or unsure, until a later audit passes)', findings, 10, `SELECT * FROM audit_findings${where}`);
   section('Recent lessons', lessons);
   db.close();
 }

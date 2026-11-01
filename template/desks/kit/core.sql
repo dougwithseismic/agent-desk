@@ -269,6 +269,20 @@ CREATE TABLE IF NOT EXISTS log (
   details TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(details))
 );
 
+-- A check of a desk's work by someone who didn't do it: something that went out on its own,
+-- a number it reported, a task it closed. Append only, like the log. A fail on an action
+-- starts trust for its kind again.
+CREATE TABLE IF NOT EXISTS audits (
+  id INTEGER PRIMARY KEY,
+  desk TEXT NOT NULL REFERENCES desks(name),  -- the desk whose work was checked
+  checked TEXT NOT NULL,                      -- action:<id>, measure:<id> or task:<id>
+  verdict TEXT NOT NULL CHECK(verdict IN ('pass','fail','unsure')),
+  notes TEXT NOT NULL,                        -- what was checked, and what was found
+  evidence TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(evidence)), -- refs someone could reopen
+  by TEXT NOT NULL,
+  at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 CREATE INDEX IF NOT EXISTS actions_queue ON actions(desk, status);
 CREATE INDEX IF NOT EXISTS actions_about ON actions(about);
 CREATE INDEX IF NOT EXISTS log_desk ON log(desk, at);
@@ -281,6 +295,7 @@ CREATE INDEX IF NOT EXISTS holds_about ON holds(about);
 CREATE INDEX IF NOT EXISTS contacts_person ON contacts(person);
 CREATE INDEX IF NOT EXISTS inbox_open ON inbox(desk, handled_at);
 CREATE INDEX IF NOT EXISTS measures_name ON measures(desk, name, observed_at);
+CREATE INDEX IF NOT EXISTS audits_checked ON audits(checked);
 
 -- Views and triggers hold no data, so they are rebuilt on every init.
 
@@ -316,11 +331,14 @@ CREATE VIEW action_touches AS
     FROM action_keys k JOIN contacts c ON c.channel || ':' || lower(c.address) = k.key
     WHERE c.person IS NOT NULL;
 
--- A hold's key in the same form as action_keys.
+-- Each hold's key in the same form as action_keys, and those of the holds in force.
+DROP VIEW IF EXISTS hold_keys;
+CREATE VIEW hold_keys AS
+  SELECT id, desk, topic, at, CASE WHEN about LIKE 'email:%' OR about LIKE 'domain:%' THEN lower(about)
+    ELSE about END AS key FROM holds;
 DROP VIEW IF EXISTS active_hold_keys;
 CREATE VIEW active_hold_keys AS
-  SELECT id, desk, topic, CASE WHEN about LIKE 'email:%' OR about LIKE 'domain:%' THEN lower(about)
-    ELSE about END AS key FROM active_holds;
+  SELECT k.id, k.desk, k.topic, k.key FROM hold_keys k JOIN active_holds h ON h.id = k.id;
 
 -- Waiting for a person to say send, change or drop.
 DROP VIEW IF EXISTS waiting;
@@ -442,6 +460,35 @@ CREATE VIEW trust_board AS
          ELSE 'drafts for review (' || clean || '/' || needed || ' clean)' END AS stage,
     epoch, updated_at
   FROM trust;
+
+-- What went out on its own in the last 14 days with no audit yet. trouble counts holds
+-- placed since on anything it touched: a bounce, a complaint or an opt-out becomes a hold.
+DROP VIEW IF EXISTS audit_due;
+CREATE VIEW audit_due AS
+  SELECT a.desk, a.id, a.kind, a.channel, a.identity, a.target, a.title, a.status, a.sent_at,
+    (SELECT count(*) FROM hold_keys h WHERE h.at >= a.sent_at
+      AND h.key IN (SELECT key FROM action_touches t WHERE t.action_id = a.id)) AS trouble
+  FROM actions a
+  WHERE a.mode = 'auto' AND a.status IN ('sent','verified','uncertain')
+    AND a.sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')
+    AND NOT EXISTS (SELECT 1 FROM audits u WHERE u.checked = 'action:' || a.id);
+
+-- Audits that failed or weren't sure, until a later audit of the same thing says otherwise.
+-- The GM's brief to the person carries these.
+DROP VIEW IF EXISTS audit_findings;
+CREATE VIEW audit_findings AS
+  SELECT u.desk, u.id, u.checked, u.verdict, u.notes, u.evidence, u.by, u.at
+  FROM audits u
+  WHERE u.verdict IN ('fail','unsure')
+    AND NOT EXISTS (SELECT 1 FROM audits v WHERE v.checked = u.checked AND v.id > u.id);
+
+-- The work an audit can check, and who made it: audit_written reads this.
+DROP VIEW IF EXISTS audited_work;
+CREATE VIEW audited_work AS
+  SELECT 'action:' || id AS checked, id, desk, created_by AS by FROM actions
+  UNION ALL SELECT 'action:' || id, id, desk, sent_by FROM actions WHERE sent_by IS NOT NULL
+  UNION ALL SELECT 'measure:' || id, id, desk, by FROM measures
+  UNION ALL SELECT 'task:' || id, id, desk, created_by FROM tasks;
 
 -- The log never changes.
 DROP TRIGGER IF EXISTS log_no_update;
@@ -834,6 +881,46 @@ BEGIN SELECT RAISE(ABORT, 'an agent gives another desk work with a brief, not a 
 DROP TRIGGER IF EXISTS task_stays;
 CREATE TRIGGER task_stays BEFORE UPDATE OF desk ON tasks WHEN NEW.desk IS NOT OLD.desk
 BEGIN SELECT RAISE(ABORT, 'a task stays on its desk: drop it here and brief the other desk'); END;
+
+-- An audit is of something on that desk, by someone who didn't make, send or record it, and
+-- says what was found. A fail or unsure carries evidence. Audits never change.
+DROP TRIGGER IF EXISTS audit_written;
+CREATE TRIGGER audit_written BEFORE INSERT ON audits
+BEGIN
+  SELECT RAISE(ABORT, 'audit something on that desk: checked is action:<id>, measure:<id> or task:<id>, and desk is its desk')
+    WHERE NOT EXISTS (SELECT 1 FROM audited_work w WHERE w.checked = NEW.checked
+      AND w.id = CAST(substr(NEW.checked, instr(NEW.checked, ':') + 1) AS INTEGER) AND w.desk = NEW.desk);
+  SELECT RAISE(ABORT, 'nobody audits their own work: another desk''s agent, or the person, checks it')
+    WHERE NEW.by IN (SELECT w.by FROM audited_work w WHERE w.checked = NEW.checked
+      AND w.id = CAST(substr(NEW.checked, instr(NEW.checked, ':') + 1) AS INTEGER));
+  SELECT RAISE(ABORT, 'say what you checked and what you found: notes')
+    WHERE trim(NEW.notes) = '';
+  SELECT RAISE(ABORT, 'evidence is a list of refs someone could reopen, and a fail or unsure needs at least one')
+    WHERE json_type(NEW.evidence) IS NOT 'array'
+      OR (NEW.verdict IN ('fail','unsure') AND json_array_length(NEW.evidence) = 0);
+END;
+DROP TRIGGER IF EXISTS audit_no_update;
+CREATE TRIGGER audit_no_update BEFORE UPDATE ON audits
+BEGIN SELECT RAISE(ABORT, 'an audit is never changed: audit it again'); END;
+DROP TRIGGER IF EXISTS audit_no_delete;
+CREATE TRIGGER audit_no_delete BEFORE DELETE ON audits
+BEGIN SELECT RAISE(ABORT, 'an audit is never deleted: audit it again'); END;
+
+-- A failed audit of an action starts trust for its kind again, as a rejection does.
+DROP TRIGGER IF EXISTS audit_failed_resets_trust;
+CREATE TRIGGER audit_failed_resets_trust AFTER INSERT ON audits
+WHEN NEW.verdict = 'fail' AND NEW.checked LIKE 'action:%'
+BEGIN
+  UPDATE trust SET clean = 0, trusted = 0, since_check = 0, epoch = epoch + 1,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE EXISTS (SELECT 1 FROM actions a WHERE a.id = CAST(substr(NEW.checked, 8) AS INTEGER) AND a.desk = trust.desk
+      AND a.kind = trust.kind AND a.channel = trust.channel AND a.identity = trust.identity);
+  INSERT INTO log(desk, by, kind, about, action_id, summary, ref)
+    SELECT a.desk, NEW.by, 'trust', a.about, a.id,
+      'trust for ' || a.kind || ' starts again: audit #' || NEW.id || ' failed #' || a.id || ': ' || NEW.notes,
+      'audit:' || NEW.id
+    FROM actions a WHERE a.id = CAST(substr(NEW.checked, 8) AS INTEGER);
+END;
 
 DROP TRIGGER IF EXISTS action_touched;
 CREATE TRIGGER action_touched AFTER UPDATE ON actions WHEN NEW.updated_at IS OLD.updated_at

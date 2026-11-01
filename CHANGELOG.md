@@ -4,6 +4,19 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-01
 
+### Work that went out on its own gets checked, and a failed check takes trust away (PRD 13) · New
+- Anyone who didn't do the work can audit it: something sent alone, a number a desk
+  reported, a task it closed. The verdict is pass, fail or unsure, with notes and evidence
+  someone can reopen.
+- A failed audit of an action resets trust for that kind, as a rejection does, and the log
+  says which audit did it. The desk shows its next ones to a person until it earns trust
+  again.
+- `audit_due` lists what went out alone in the last two weeks with no audit, with anything
+  that bounced or drew a complaint first. `audit_findings` lists fails and unsures until a
+  later audit says otherwise. `status` shows both.
+- Nobody can audit their own work, and an audit never changes.
+- How to choose what to check and write a verdict: `desks/kit/playbooks/audits.md`.
+
 ### A desk's agent works under its own name, and only a person gives it more room (PRD 12) · New
 - Put `Agent: gm` in a desk's `desk.md` and run `init`. The agent then works with `--as gm`
   (or `DESK_AS=gm`), so the database can tell its work from the person's say-so.

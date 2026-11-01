@@ -1578,3 +1578,93 @@ test('a database from before migration 001 gets it once and keeps its trust', as
   assert.deepEqual([t.coach_needed, t.clean, t.needed, t.trusted, t.last_by, t.note], [0, 3, 3, 1, null, null]);
   await p.fails("UPDATE trust SET needed = 1 WHERE kind = 'brief'", /only a person loosens trust/);
 });
+
+// ---------- audits: spot checks both ways ----------
+
+const desksForAudits = { seo: {}, gm: { agent: 'gm' } };
+const audit = (checked, verdict, o = {}) => `INSERT INTO audits(desk, checked, verdict, notes, evidence, by)
+  VALUES (${q(o.desk ?? 'seo')}, ${q(checked)}, ${q(verdict)}, ${q(o.notes ?? 'read it against the thread')},
+    ${q(o.evidence ?? '["mail:thread-1"]')}, ${o.by ? q(o.by) : ':me'}) RETURNING id`;
+async function trustedSeo(p) {
+  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coach_needed, trusted, clean, last_by, note)
+      VALUES ('seo', 'email-reply', 'email', 'doug@x.com', 0, 1, 5, 'doug', 'trust its replies');
+    INSERT INTO allowed(desk, kind, channel, identity, words, by)
+      VALUES ('seo', 'email-reply', 'email', 'doug@x.com', 'let replies go', 'doug');`);
+}
+async function sentAlone(p, o = {}) {
+  const id = await create(p, { status: 'draft', ...o });
+  await p.sql(`${claim(id, 'auto', o.sentBy ?? 'doug')}\n${land(id)}`);
+  return id;
+}
+
+test('an audit is of someone else\'s work, says what it found, and never changes', async () => {
+  const p = await project(desksForAudits);
+  await trustedSeo(p);
+  const mine = await sentAlone(p);
+  const sams = await sentAlone(p, { by: 'sam' });
+  await p.fails(audit(`action:${mine}`, 'pass'), /nobody audits their own work/);
+  await p.fails(audit(`action:${sams}`, 'pass'), /nobody audits their own work/);
+  await p.fails(audit(`action:${sams}`, 'pass', { by: 'sam' }), /nobody audits their own work/);
+  await p.fails(audit(`action:${mine}`, 'pass', { desk: 'gm' }), /audit something on that desk/, gm);
+  await p.fails(audit('action:999', 'pass'), /audit something on that desk/, gm);
+  await p.fails(audit(`action:${mine}x`, 'pass'), /audit something on that desk/, gm);
+  await p.fails(audit(`action:${mine}`, 'pass', { notes: ' ' }), /say what you checked and what you found/, gm);
+  await p.fails(audit(`action:${mine}`, 'unsure', { evidence: '[]' }), /a fail or unsure needs at least one/, gm);
+  await p.fails(audit(`action:${mine}`, 'pass', { evidence: '{"thread":"mail:1"}' }), /evidence is a list of refs/, gm);
+  const { id } = await p.one(audit(`action:${mine}`, 'pass', { evidence: '[]' }), gm);
+  await p.fails(`UPDATE audits SET verdict = 'fail' WHERE id = ${id}`, /an audit is never changed/);
+  await p.fails(`DELETE FROM audits WHERE id = ${id}`, /an audit is never deleted/);
+
+  const { id: m } = await p.one("INSERT INTO measures(desk, name, value, source, by) VALUES ('seo', 'clicks-7d', 120, 'gsc', 'doug') RETURNING id");
+  const { id: t } = await p.one("INSERT INTO tasks(desk, what, created_by) VALUES ('seo', 'fix the titles', 'doug') RETURNING id");
+  await p.fails(audit(`measure:${m}`, 'pass'), /nobody audits their own work/);
+  await p.fails(audit(`task:${t}`, 'pass'), /nobody audits their own work/);
+  await p.sql(`${audit(`measure:${m}`, 'pass')}; ${audit(`task:${t}`, 'unsure', { notes: 'no proof in the task' })}`, gm);
+  assert.deepEqual((await p.sql('SELECT checked, by FROM audits ORDER BY id')).map((r) => `${r.checked} ${r.by}`),
+    [`action:${mine} gm`, `measure:${m} gm`, `task:${t} gm`]);
+  // task:12<n> is that task, not action <n>, even when the auditor wrote action <n>.
+  const gms = await create(p, { desk: 'gm', by: 'gm' });
+  await p.sql(`INSERT INTO tasks(id, desk, what, created_by) VALUES (12${gms}, 'seo', 'check the export', 'doug')`);
+  await p.sql(audit(`task:12${gms}`, 'pass'), gm);
+  const st = JSON.parse((await p.run(['status', '--json'])).out);
+  assert.deepEqual(st.audit_findings.map((r) => `${r.checked} ${r.verdict}`), [`task:${t} unsure`]);
+  assert.deepEqual(st.audits_due, [{ desk: 'seo', due: 1, trouble: 0 }]);
+});
+
+test('a failed audit takes trust away and says why; audit_due lists what went out alone', async () => {
+  const p = await project(desksForAudits);
+  await trustedSeo(p);
+  const [a1, a2] = [await sentAlone(p), await sentAlone(p)];
+  const a3 = await sentAlone(p, { target: 'email:sam@beta.com', about: 'brand:beta' });
+  const shown = await create(p);
+  await p.sql(humanSend(shown));
+  const failed = await create(p, { status: 'draft', target: 'email:kim@gamma.com' });
+  await p.sql(`${claim(failed, 'auto')}\nUPDATE actions SET status = 'failed', result = 'refused at once' WHERE id = ${failed};`);
+  await p.sql("INSERT INTO holds(about, reason, source, by) VALUES ('email:Jo@acme.com', 'bounced', 'mail:bounce-1', 'doug')");
+  const due = await p.sql('SELECT id, trouble FROM audit_due ORDER BY trouble > 0 DESC, sent_at DESC');
+  assert.deepEqual(due.map((r) => [r.id, r.trouble]), [[a2, 1], [a1, 1], [a3, 0]]);
+
+  const before = await trustRow(p);
+  await p.sql(audit(`action:${a3}`, 'pass'), gm);
+  assert.equal((await trustRow(p)).epoch, before.epoch);
+  const { id } = await p.one(audit(`action:${a1}`, 'fail', { notes: 'promised a rate we do not offer' }), gm);
+  const after = await trustRow(p);
+  assert.deepEqual([after.trusted, after.clean, after.epoch], [0, 0, before.epoch + 1]);
+  const said = await p.one("SELECT by, action_id, ref, summary FROM log WHERE kind = 'trust' AND ref LIKE 'audit:%'");
+  assert.deepEqual(said, { by: 'gm', action_id: a1, ref: `audit:${id}`,
+    summary: `trust for email-reply starts again: audit #${id} failed #${a1}: promised a rate we do not offer` });
+  assert.deepEqual((await p.sql('SELECT id FROM audit_due')).map((r) => r.id), [a2]);
+  await p.fails(claim(await create(p, { status: 'draft', target: 'email:sam@beta.com' }), 'auto'), /not trusted/);
+
+  const { id: m } = await p.one("INSERT INTO measures(desk, name, value, source, by) VALUES ('seo', 'clicks-7d', 900, 'gsc', 'doug') RETURNING id");
+  await p.sql(audit(`measure:${m}`, 'fail', { notes: 'GSC says 90, not 900', evidence: '["gsc:clicks-7d"]' }), gm);
+  assert.equal((await trustRow(p)).epoch, before.epoch + 1);
+  assert.deepEqual((await p.sql('SELECT checked, verdict FROM audit_findings ORDER BY id DESC')).map((r) => `${r.checked} ${r.verdict}`),
+    [`measure:${m} fail`, `action:${a1} fail`]);
+
+  const st = await p.run(['status', 'seo']);
+  assert.match(st.out, /1 sent alone, not audited \(1 with trouble since\)/);
+  assert.match(st.out, /Audit findings[\s\S]*measure:\d+ +fail +GSC says 90, not 900/);
+  await p.sql(audit(`action:${a1}`, 'pass', { by: 'doug2', notes: 'rate fixed in the follow-up' }));
+  assert.deepEqual((await p.sql('SELECT checked FROM audit_findings')).map((r) => r.checked), [`measure:${m}`]);
+});
