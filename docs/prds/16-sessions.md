@@ -1,4 +1,4 @@
-# PRD 16: the GM starts desks' sessions
+# PRD 16: the GM starts desks' sessions, and watches for stalled work
 
 ## Goal
 
@@ -8,7 +8,22 @@ should delegate and start Claude Code sessions without a yes box each time. In t
 scheduled tasks are the one way a session can start another without a click, so the GM uses
 them.
 
+Starting a desk is one answer to stalled work. The other is noticing it: a desk whose
+listener went quiet, a brief past its due, an action stuck sending, audits left undone, a
+headline nobody measured. Nothing looks for those unless a person does.
+
 ## Locked decisions
+
+- **The watchdog** is a core view, `watchdog`, one row per problem with the desk, what's wrong
+  in words, since when, and what fixes it:
+  - due agent work, an open brief or a round due, and nobody listening for 15 minutes;
+  - a brief open past its `due`, or 7 days with none;
+  - an action `sending` for more than 15 minutes, or `uncertain` for more than an hour;
+  - `audit_due` rows older than 7 days;
+  - a desk's headline not measured for 7 days, or a check past its date.
+  The GM's round reads it first, does what it may (start the desk, brief again, audit), and
+  puts the rest in the person's brief. `status` shows it for every desk. Until scheduled tasks
+  are allowed, `status` and the person's brief are where it's seen.
 
 - **What the app allows** (checked 1 Nov): `start_session` shows the person a card unless they
   asked in words, and it's refused on turns started by another session or an automated event.
@@ -45,10 +60,14 @@ them.
 4. WHEN the GM's scheduled run finds a GM chat already listening THE new run SHALL stop
    without taking over.
 5. WHEN `status` runs THE output SHALL show which desks have work and nobody listening.
+6. WHEN a brief passes its due, an action stays `sending` past 15 minutes, or audits wait past
+   7 days THE `watchdog` view SHALL list each with its desk and what fixes it, and `status`
+   SHALL show them; WHEN the problem is fixed THE row SHALL go.
 
 ## Tasks
 
-1. `desk.mjs`: read `Start:`; `status` flags; a view of desks with work and no listener.
+1. `core.sql`: the `watchdog` view, with a test per row type. `desk.mjs`: read `Start:`;
+   `status` shows the watchdog.
 2. `kit/types/gm/playbooks/sessions.md`: setting up the tasks with the person, the start rule,
    permissions.
 3. `new-desk`: offer the tasks during GM setup, after the person's yes.

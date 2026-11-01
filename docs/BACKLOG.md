@@ -71,7 +71,8 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
 - [ ] **PRD 14** Stripe as a source, read-only (`docs/prds/14-stripe.md`).
 - [ ] **PRD 15** The GM desk type, and desk types in the kit (`docs/prds/15-gm-desk.md`).
       Needs 11–14.
-- [ ] **PRD 16** The GM starts desks' sessions (`docs/prds/16-sessions.md`). Needs 15.
+- [ ] **PRD 16** The GM starts desks' sessions, and a watchdog for stalled work
+      (`docs/prds/16-sessions.md`). Needs 15. The watchdog view can land before the rest.
       (needs you: a yes to create scheduled tasks in a project, and the mode they run in)
 - [ ] **PRD 17** The affiliates desk type: recruit, onboard and pay affiliates
       (`docs/prds/17-affiliates-desk.md`). Needs 15.
@@ -129,6 +130,9 @@ they're claimed.
   with Node's built-in WebSocket. Same output, no 30-second delay.
 - Gmail API send for alias first touches from `desk.mjs send`, so cold mail needs no
   separate script.
+- Always on (1 Nov): desk rounds run from the cloud (Claude Code cloud sessions or routines)
+  against the hosted database, so desks work with the Mac asleep; the Mac stays the place for
+  work that needs its files. State is already in the database and mail in the Worker.
 - Managed Agents, for a desk that must work with the Mac off (worker and hosted database
   on a server, billed per token).
 - A headless runner (`claude -p` started by a no-model watcher), for a desk no chat is

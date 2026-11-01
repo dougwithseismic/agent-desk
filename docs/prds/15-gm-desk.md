@@ -30,6 +30,13 @@ and spot checks a person can rely on.
   key (`bet:<slug>`), what it is, why, the effect it expects on the headline or a funnel step,
   the desks that own it, its stage (`proposed`, `running`, `checking`, `won`, `lost`, `dropped`)
   and a core `check` with its baseline and date.
+- **The GM briefs, it doesn't do.** Its own actions are on channel `desk` (briefs) or `gm`
+  (initiatives); email, site changes and anything else that goes out belong to the desk that
+  owns them. A `Type: gm` line in `desk.md` is recorded on `init` (core migration 002 adds
+  `desks.type`), and a trigger refuses any other action on a desk of that type. A prompt
+  telling a model to delegate isn't enough: left to judge, it does "small" work itself. Work
+  outside the database (editing code, say) can't be guarded, so the round playbook says to
+  brief a builder instead.
 - **Its decisions:**
 
   | Kind | What it is | Alone? |
@@ -73,6 +80,8 @@ and spot checks a person can rely on.
 5. WHEN a bet's check comes due THE GM's round SHALL measure it the same way as its baseline and
    record a verdict.
 6. WHEN the GM proposes an initiative THE action SHALL wait for the person, whatever its trust.
+7. WHEN a desk of type `gm` creates an action on any channel but `desk` or `gm` THE database
+   SHALL refuse it, with a message saying to brief the desk that owns that work.
 
 ## Tasks
 
@@ -82,6 +91,8 @@ and spot checks a person can rely on.
 3. Views the round reads: one row per desk for the board, went-alone since a time, briefs, and
    audits due (some come from 11 and 13).
 4. An end-to-end test: a throwaway project, the GM type, two desks, a fake Stripe, one round.
+5. Core migration 002 (`desks.type`), `init` reading `Type:`, and the briefs-only trigger with
+   its test.
 
 ## Implementation Notes
 

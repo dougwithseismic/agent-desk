@@ -94,6 +94,17 @@ for each one. He wants the same in the React SaaS starter.
   `desk:<name>`. Sending it creates a task on that desk, which wakes the desk's listening chat.
   Briefs earn trust the way emails do: shown at first, then alone with every fifth in full. A
   brief never approves anything: the receiving desk's own sends still need their own trust.
+- **The GM briefs, it doesn't do** (Doug, 1 Nov, after reading a published design for
+  always-on agents whose router hands out work and never does it, and whose tests found a
+  model told to delegate still did the work itself some of the time). A GM desk's own actions
+  are briefs and initiatives; anything that goes out into the world goes through the desk that
+  owns it. The database refuses any other action on a GM desk (PRD 15), because a prompt isn't
+  enough.
+- **A watchdog** (same day). Something has to notice stalled work without a person looking: a
+  desk with work and nobody listening, a brief past its due, an action stuck sending or
+  uncertain, audits left undone, a headline nobody measured. One view lists them; the GM's
+  round reads it first and `status` shows it (PRD 16). Running desks from the cloud so they
+  work with the Mac asleep is parked, not dropped.
 - **Agents tighten, people loosen.** An agent working under its own name may pause work (a
   hold), revoke what's allowed and take trust away. It can't approve, grant `allowed`, release a
   hold someone else placed, or loosen trust settings. The database refuses those writes. Like
