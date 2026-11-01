@@ -211,8 +211,8 @@ async function openLocal(db) {
           try {
             const st = conn.prepare(s.sql);
             const cols = st.columns().map((c) => c.name);
-            // node:sqlite binds every number as REAL, so 'brief:' || :id would read brief:1.0.
-            // Whole numbers go in as integers, as they do on a hosted database.
+            // node:sqlite binds every number as REAL, so :n = 7 reaches SQL as 7.0 and reads
+            // '7.0' as text. Whole numbers go in as integers, as they do on a hosted database.
             const args = Object.fromEntries(Object.entries(s.args).map(([k, v]) => [k, Number.isSafeInteger(v) ? BigInt(v) : v]));
             if (cols.length) {
               st.setReturnArrays(true);
@@ -588,7 +588,7 @@ async function status(flags, deskName) {
     if (u) bits.push(`${u} UNCERTAIN`);
     if (l) bits.push(`${l} locked`);
     const br = briefed.get(name);
-    if (br) bits.push(`${br.n} brief${br.n === 1 ? '' : 's'} open, oldest ${br.days} d`);
+    if (br) bits.push(`${br.n} brief${br.n === 1 ? '' : 's'} open, oldest ${ago(br.days * 86400000)}`);
     const ear = heard.get(name);
     if (ear) bits.push(listeningNow(ear));
     let line = `${name}: ${bits.join(' · ')}`;
@@ -1164,23 +1164,24 @@ async function send(flags, idText) {
   const a = await action();
   if (!a) fail(`no action ${id}`);
   const stop = (why) => fail(`not sent: action ${id} ${why}`);
-  if (a.channel === 'desk') return sendBrief(flags, id, a, stop);
-  mailSettings();
   const look = `look with node desks/desk.mjs mail sent --key '${a.key}'`;
 
   // What the database will be asked, and what it can't be asked at all.
-  if (a.channel !== 'email') stop(`goes out by ${a.channel}, not email: send it with the desk's own tool`);
+  if (a.channel !== 'email' && a.channel !== 'desk') stop(`goes out by ${a.channel}, not email: send it with the desk's own tool`);
+  const already = `was ${a.channel === 'desk' ? 'delivered' : 'sent'} already (${a.provider_ref})`;
   const mode = { approved: 'human', draft: 'auto' }[a.status];
   if (!mode) {
     stop({
       waiting: 'is waiting for a person: show it and ask',
       sending: `is being sent by ${a.sent_by}. If that stopped mid-way, ${look} and settle it (together.md)`,
-      sent: `was sent already (${a.provider_ref})`,
-      verified: `was sent already (${a.provider_ref})`,
+      sent: already,
+      verified: already,
       uncertain: `might have gone already, so it is never sent again: ${look}, then settle it as sent or failed`,
       failed: 'failed, and that is final: a new try is a new action with a new key',
     }[a.status] ?? `is ${a.status}`);
   }
+  if (a.channel === 'desk') return sendBrief(flags, id, a, mode, stop);
+  mailSettings();
   const email = emailFor(a, stop);
 
   // Right before the claim, the Worker checks it as it would send it: sender, addresses,
@@ -1250,15 +1251,7 @@ async function send(flags, idText) {
 // Delivers a brief (channel desk) as a task on the desk it names. The claim, the task and the
 // record are one write, so a brief is delivered once or not at all. Nothing leaves the
 // database, so delivery is its own verification.
-async function sendBrief(flags, id, a, stop) {
-  const mode = { approved: 'human', draft: 'auto' }[a.status];
-  if (!mode) {
-    stop({
-      waiting: 'is waiting for a person: show it and ask',
-      sent: `was delivered already (${a.provider_ref})`,
-      verified: `was delivered already (${a.provider_ref})`,
-    }[a.status] ?? `is ${a.status}`);
-  }
+async function sendBrief(flags, id, a, mode, stop) {
   let results;
   try {
     results = await query(`
@@ -1268,25 +1261,22 @@ async function sendBrief(flags, id, a, stop) {
           json_extract(payload, '$.about'), json_extract(payload, '$.due'),
           json_extract(payload, '$.done_when'), 'brief:' || id, :me
         FROM actions WHERE id = :id AND status = 'sending' AND sent_by = :me;
-      UPDATE actions SET status = 'sent', last_by = :me,
-          provider_ref = (SELECT 'task:' || t.id FROM tasks t WHERE t.source = 'brief:' || actions.id)
+      UPDATE actions SET status = 'verified', last_by = :me,
+          provider_ref = (SELECT 'task:' || t.id FROM tasks t WHERE t.source = 'brief:' || actions.id),
+          result = 'delivered to the ' || substr(target, 6) || ' desk'
         WHERE id = :id AND status = 'sending' AND sent_by = :me;
-      UPDATE actions SET status = 'verified', last_by = :me, result = 'delivered as ' || provider_ref
-        WHERE id = :id AND status = 'sent' AND sent_by = :me;
-      SELECT status, provider_ref FROM actions WHERE id = :id;`, { id, mode, was: a.status });
+      SELECT a.status, a.provider_ref, a.result, t.id AS task, t.desk FROM actions a
+        LEFT JOIN tasks t ON t.source = 'brief:' || a.id WHERE a.id = :id;`, { id, mode, was: a.status });
   } catch (e) {
     if (!(e instanceof DeskError)) throw e;
     fail(`not sent: ${e.message}`);
   }
-  const [status, ref] = results.at(-1).rows[0] ?? [];
+  const [status, ref, result, task, desk] = results.at(-1).rows[0] ?? [];
   if (!results[0].changes) {
     stop(status === 'verified' ? `was delivered already (${ref})` : 'changed while it was being sent: read it again');
   }
-  if (status !== 'verified') fail(`brief #${id} was claimed but not recorded as delivered (it is ${status}): read it and the tasks on the ${a.target.slice(5)} desk`);
-  const task = Number(ref.slice(5));
-  const to = a.target.slice(5);
-  if (flags.json) console.log(JSON.stringify({ action: id, status, provider_ref: ref, task, desk: to, key: a.key }));
-  else console.log(`Delivered #${id} to the ${to} desk as task ${task}${mode === 'auto' ? ', on its own' : ''}. A chat listening to ${to} wakes for it, and the result comes back in the log.`);
+  if (flags.json) console.log(JSON.stringify({ action: id, status, provider_ref: ref, result, key: a.key, task, desk }));
+  else console.log(`Delivered #${id} to the ${desk} desk as task ${task}${mode === 'auto' ? ', on its own' : ''}. A chat listening to ${desk} wakes for it, and the result comes back in the log.`);
   return 0;
 }
 

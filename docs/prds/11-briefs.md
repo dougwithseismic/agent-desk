@@ -89,18 +89,25 @@ fifth shown in full.
 
 Built as planned, on 2026-11-01:
 
-- `core.sql`: brief checks on insert and again at send (target desk exists and isn't the
-  briefing desk, `done_when`, `owner`, `due` a date); `brief_sent_has_task`, so a brief is
-  never `sent` without its own task; `task_from_brief` (a `brief:<n>` task only while brief
-  n is being sent to that desk, and only once); `task_from_brief_closed` logs done, dropped
-  and blocked on the briefing desk; the `briefs` view; an index on `tasks(source)`.
+- `core.sql`: the `brief_faults` view says what's wrong with a brief (target desk exists and
+  isn't the briefing desk, `done_when`, `owner`, `due` a date); `brief_written` and
+  `brief_edited` refuse on it when a brief is written and whenever its target or payload
+  changes, so an approved brief can always be sent. `brief_sent_has_task`, so a brief is
+  never `sent` or `verified` without its own task; `task_from_brief` (a `brief:<n>` task
+  only while brief n is being sent to that desk, and only once); `task_from_brief_closed`
+  logs done, dropped and blocked on the briefing desk; the `briefs` view; indexes on
+  `tasks(source)` and on briefs' targets.
 - `desk.mjs send` branches to `sendBrief` for channel `desk` before reading mail settings,
   so desks without mail can brief. The claim, task and record are one transaction.
 - Found while building: node:sqlite binds every JS number as REAL, so on a local database
   `'brief:' || :id` read `brief:1.0` and the brief was verified with no `provider_ref`.
   Local binding now passes whole numbers as integers, matching hosted. This also fixes
   `-a n=5` reaching local SQL as 5.0.
-- Tests: 8 brief tests plus the integer binding test; `pnpm test` 93/93. Not run against a
+- Simplify pass: the brief checks moved from insert and send time to write and edit time
+  (one view, two triggers), the brief send went into its own `sendBrief`, and `status`
+  gives the oldest brief's age the way it gives every other age. The view qualifies its
+  columns, because `desks` has a `target` column of its own.
+- Tests: 7 brief tests plus the integer binding test; `pnpm test` 93/93. Not run against a
   hosted database: briefs use the existing multi-statement write path.
 
 Open: nothing for this PRD. Agents vs people (who may approve a brief) is PRD 12.

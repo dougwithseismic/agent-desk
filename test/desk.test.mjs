@@ -123,8 +123,8 @@ const humanSend = (id, version = 1) => `${approve(id, version)}\n${claim(id)}\n$
 async function create(p, o) {
   return (await p.one(newAction(o))).id;
 }
-async function trustRow(p, kind = 'email-reply') {
-  return p.one(`SELECT * FROM trust WHERE desk = 'seo' AND kind = ${q(kind)}`);
+async function trustRow(p, kind = 'email-reply', desk = 'seo') {
+  return p.one(`SELECT * FROM trust WHERE desk = ${q(desk)} AND kind = ${q(kind)}`);
 }
 
 // ---------- the script ----------
@@ -1270,21 +1270,22 @@ test('mail reads the desk\'s own mail from the Worker, as data', async () => {
 // ---------- briefs: one desk hands work to another ----------
 
 const briefPayload = (o = {}) => JSON.stringify({ done_when: 'Acme has our email, or we know why not', ...o });
-const brief = (o = {}) => newAction({
+const briefAction = (o = {}) => ({
   desk: 'gm', kind: 'brief', channel: 'desk', identity: 'gm', about: 'brand:acme', target: 'desk:partners',
   title: 'Ask Acme to list us', body: 'Acme lists tools like ours on its resources page. Write to them.',
   payload: briefPayload({ due: '2026-11-08', about: 'brand:acme' }), ...o,
 });
+const brief = (o) => newAction(briefAction(o));
 const desksForBriefs = { gm: {}, partners: {} };
 
 test('an approved brief becomes one task on the other desk, and the brief is verified', async () => {
   const p = await project(desksForBriefs);
-  const { id } = await p.one(brief());
+  const id = await create(p, briefAction());
   await p.sql(approve(id));
   const r = await p.run(['send', String(id), '--json']);
   assert.equal(r.code, 0, r.err);
   const out = JSON.parse(r.out);
-  assert.deepEqual([out.status, out.desk], ['verified', 'partners']);
+  assert.deepEqual([out.status, out.desk, out.result], ['verified', 'partners', 'delivered to the partners desk']);
   const task = await p.one(`SELECT * FROM tasks WHERE source = 'brief:${id}'`);
   assert.deepEqual(
     [task.id, task.desk, task.what, task.owner, task.about, task.due, task.done_when, task.status, task.created_by],
@@ -1293,14 +1294,14 @@ test('an approved brief becomes one task on the other desk, and the brief is ver
   const a = await p.one(`SELECT status, provider_ref, mode, sent_by, trust_counted_at FROM actions WHERE id = ${id}`);
   assert.deepEqual([a.status, a.provider_ref, a.mode, a.sent_by], ['verified', `task:${task.id}`, 'human', 'doug']);
   assert.ok(a.trust_counted_at, 'delivery counts towards trust');
-  assert.equal((await p.one("SELECT coached FROM trust WHERE desk = 'gm' AND kind = 'brief'")).coached, 1);
+  assert.equal((await trustRow(p, 'brief', 'gm')).coached, 1);
   const st = await p.run(['status']);
-  assert.match(st.out, /partners: .*1 brief open, oldest 0 d/);
+  assert.match(st.out, /partners: .*1 brief open, oldest 0s/);
 });
 
 test('a brief is delivered once, however many times or ways it is sent', async () => {
   const p = await project(desksForBriefs);
-  const { id } = await p.one(brief());
+  const id = await create(p, briefAction());
   await p.sql(approve(id));
   const racers = await Promise.all(['w1', 'w2', 'w3', 'w4', 'w5'].map((u) => p.run(['send', String(id)], { user: u })));
   assert.equal(racers.filter((r) => r.code === 0).length, 1, racers.map((r) => r.out + r.err).join('\n'));
@@ -1310,32 +1311,39 @@ test('a brief is delivered once, however many times or ways it is sent', async (
   assert.match(again.err, /was delivered already \(task:\d+\)/);
 
   // A task can't claim to come from a brief, before it's delivered or after.
-  const { id: other } = await p.one(brief());
+  const other = await create(p, briefAction());
   await p.fails(`INSERT INTO tasks(desk, what, source, created_by) VALUES ('partners', 'sneak', 'brief:${other}', 'doug')`,
     /a task from a brief is made by sending the brief/);
   await p.fails(claim(id), /only an approved action/);
 
-  // Nor can a brief be recorded as sent without a task of its own.
+  // Nor can a brief be recorded as sent or verified without a task of its own.
   const { id: task } = await p.one(`SELECT id FROM tasks WHERE source = 'brief:${id}'`);
   await p.sql(approve(other) + claim(other));
-  for (const ref of ['NULL', `'task:${task}'`]) {
-    await p.fails(`UPDATE actions SET status = 'sent', provider_ref = ${ref} WHERE id = ${other}`, /a brief is sent by delivering it as a task/);
+  for (const status of ['sent', 'verified']) {
+    for (const ref of ['NULL', `'task:${task}'`]) {
+      await p.fails(`UPDATE actions SET status = '${status}', provider_ref = ${ref} WHERE id = ${other}`,
+        /a brief is sent by delivering it as a task/);
+    }
   }
+  // A brief claimed by hand still makes one task, not two.
+  const byHand = `INSERT INTO tasks(desk, what, source, created_by) VALUES ('partners', 'by hand', 'brief:${other}', 'doug')`;
+  await p.sql(byHand);
+  await p.fails(byHand, /that brief was delivered already/);
 });
 
 test('a brief that is waiting, untrusted or held stays where it is and makes no task', async () => {
   const p = await project(desksForBriefs);
-  const { id: waiting } = await p.one(brief());
+  const waiting = await create(p, briefAction());
   const w = await p.run(['send', String(waiting)]);
   assert.equal(w.code, 1);
   assert.match(w.err, /is waiting for a person/);
 
-  const { id: draft } = await p.one(brief({ status: 'draft' }));
+  const draft = await create(p, briefAction({ status: 'draft' }));
   const d = await p.run(['send', String(draft)]);
   assert.equal(d.code, 1);
   assert.match(d.err, /coached examples always go to a person|not trusted/);
 
-  const { id: held } = await p.one(brief());
+  const held = await create(p, briefAction());
   await p.sql(approve(held));
   await p.sql(`INSERT INTO holds(desk, about, reason, by) VALUES (NULL, 'desk:partners', 'partners is busy with a launch', 'doug')`);
   const h = await p.run(['send', String(held)]);
@@ -1345,7 +1353,7 @@ test('a brief that is waiting, untrusted or held stays where it is and makes no 
   assert.equal((await p.one('SELECT count(*) AS n FROM tasks')).n, 0);
 
   // A hold for the briefing desk only stops its briefs too.
-  await p.sql("UPDATE holds SET released_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), released_by = 'doug', release_reason = 'launch done'");
+  await p.sql("UPDATE holds SET released_at = :now, released_by = :me, release_reason = 'launch done'");
   await p.sql(`INSERT INTO holds(desk, about, topic, reason, by) VALUES ('gm', 'desk:partners', 'brief', 'no more briefs this week', 'doug')`);
   assert.match((await p.run(['send', String(held)])).err, /held/);
 });
@@ -1360,17 +1368,17 @@ test('a brief names another desk, says when it is done, and goes to an agent or 
   await p.fails(brief({ payload: briefPayload({ owner: 'doug' }) }), /agent or a builder/);
   await p.fails(brief({ payload: briefPayload({ due: 'next week' }) }), /payload.due is a date/);
 
-  // Edited while it waited: checked again as it goes.
-  const { id } = await p.one(brief());
-  await p.sql(`UPDATE actions SET payload = '{"done_when": ""}', last_by = 'doug' WHERE id = ${id}`);
+  // An edit is checked as it's made, so an approved brief can always be sent.
+  const id = await create(p, briefAction());
+  await p.fails(`UPDATE actions SET payload = '{"done_when": ""}', last_by = 'doug' WHERE id = ${id}`, /set payload.done_when/);
+  await p.fails(`UPDATE actions SET payload = json_set(payload, '$.due', 'next friday'), last_by = 'doug' WHERE id = ${id}`,
+    /payload.due is a date/);
+  await p.fails(`UPDATE actions SET target = 'desk:gm', last_by = 'doug' WHERE id = ${id}`, /a brief goes to another desk/);
+  await p.sql(`UPDATE actions SET payload = json_set(payload, '$.due', '2026-11-15'), last_by = 'doug' WHERE id = ${id}`);
   await p.sql(approve(id, 2));
-  assert.match((await p.run(['send', String(id)])).err, /set payload.done_when/);
-  const { id: late } = await p.one(brief());
-  await p.sql(`UPDATE actions SET payload = json_set(payload, '$.due', 'next friday'), last_by = 'doug' WHERE id = ${late}`);
-  await p.sql(approve(late, 2));
-  assert.match((await p.run(['send', String(late)])).err, /payload.due is a date/);
-  assert.equal((await p.one('SELECT count(*) AS n FROM tasks')).n, 0);
-  const { id: builder } = await p.one(brief({ payload: briefPayload({ owner: 'builder' }) }));
+  assert.equal((await p.run(['send', String(id)])).code, 0);
+  assert.equal((await p.one(`SELECT due FROM tasks WHERE source = 'brief:${id}'`)).due, '2026-11-15');
+  const builder = await create(p, briefAction({ payload: briefPayload({ owner: 'builder' }) }));
   await p.sql(approve(builder));
   assert.equal((await p.run(['send', String(builder)])).code, 0);
   assert.equal((await p.one(`SELECT owner FROM tasks WHERE source = 'brief:${builder}'`)).owner, 'builder');
@@ -1380,7 +1388,7 @@ test('a brief that fails part-way is not delivered and makes no task', async () 
   const p = await project({ gm: {}, partners: { schema: `DROP TRIGGER IF EXISTS test_no_tasks;
     CREATE TRIGGER test_no_tasks BEFORE INSERT ON tasks WHEN NEW.desk = 'partners'
     BEGIN SELECT RAISE(ABORT, 'test: partners takes no tasks'); END;` } });
-  const { id } = await p.one(brief());
+  const id = await create(p, briefAction());
   await p.sql(approve(id));
   const r = await p.run(['send', String(id)]);
   assert.equal(r.code, 1);
@@ -1392,17 +1400,15 @@ test('a brief that fails part-way is not delivered and makes no task', async () 
 test('the listening desk wakes for a brief once, and the briefing desk hears how it went', async () => {
   const p = await project(desksForBriefs);
   assert.equal((await p.run(['watch', 'partners', ...quick])).out, 'nothing new for partners in 0s\n');
-  const listening = p.run(['watch', 'partners', '--every', '0.05', '--max', '10s']);
-  await new Promise((r) => setTimeout(r, 300));
-  const { id } = await p.one(brief({ payload: briefPayload() }));
+  const id = await create(p, briefAction({ payload: briefPayload() }));
   await p.sql(approve(id));
   assert.equal((await p.run(['send', String(id)])).code, 0);
   const { id: task } = await p.one(`SELECT id FROM tasks WHERE source = 'brief:${id}'`);
-  assert.equal((await listening).out, `task ${task} due now\n`);
+  assert.equal((await p.run(['watch', 'partners', ...quick])).out, `task ${task} due now\n`);
   assert.equal((await p.run(['watch', 'partners', ...quick])).out, 'nothing new for partners in 0s\n', 'once');
 
   await p.sql(`UPDATE tasks SET status = 'done', result = 'emailed Jo at Acme (#88)', proof = 'action:88',
-    done_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ${task}`);
+    done_at = :now WHERE id = ${task}`);
   const heard = await p.one(`SELECT desk, by, about, action_id, summary FROM log WHERE action_id = ${id} ORDER BY id DESC LIMIT 1`);
   assert.deepEqual([heard.desk, heard.by, heard.about], ['gm', 'desk:partners', `task:${task}`]);
   assert.match(heard.summary, new RegExp(`brief #${id} to partners: task ${task} done: emailed Jo at Acme`));
@@ -1416,12 +1422,12 @@ test('trusted, allowed briefs go alone, with every fifth shown to a person', asy
       VALUES ('gm', 'brief', 'desk', 'gm', 2, 5, 1, 'test');
     INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('gm', 'brief', 'desk', 'gm', 'brief the desks yourself', 'doug')`);
   for (let i = 0; i < 4; i++) {
-    const { id } = await p.one(brief({ status: 'draft', key: `brief:alone:${i}` }));
+    const id = await create(p, briefAction({ status: 'draft', key: `brief:alone:${i}` }));
     const r = await p.run(['send', String(id), '--json']);
     assert.equal(r.code, 0, r.err);
     assert.equal((await p.one(`SELECT mode FROM actions WHERE id = ${id}`)).mode, 'auto');
   }
-  const { id: fifth } = await p.one(brief({ status: 'draft' }));
+  const fifth = await create(p, briefAction({ status: 'draft' }));
   assert.match((await p.run(['send', String(fifth)])).err, /spot check due/);
   assert.equal((await p.one('SELECT count(*) AS n FROM tasks')).n, 4);
 });
