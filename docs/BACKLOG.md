@@ -65,7 +65,7 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
 ### Rows
 
 - [x] **PRD 11** Briefs: desks hand work to each other (`docs/prds/11-briefs.md`).
-- [ ] **PRD 12** Agents work under their own names: they tighten, people loosen
+- [~] (building since 2026-11-01, main session; core migration 001) **PRD 12** Agents work under their own names: they tighten, people loosen
       (`docs/prds/12-agents-tighten.md`). Needs 11.
 - [ ] **PRD 13** Audits: spot checks both ways (`docs/prds/13-audits.md`). Needs 12.
 - [ ] **PRD 14** Stripe as a source, read-only (`docs/prds/14-stripe.md`).
@@ -75,7 +75,7 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
       (needs you: a yes to create scheduled tasks in a project, and the mode they run in)
 - [ ] **PRD 17** The affiliates desk type: recruit, onboard and pay affiliates
       (`docs/prds/17-affiliates-desk.md`). Needs 15.
-- [~] (merged to the starter's local main 2026-11-01; not pushed, not yet run against Stripe test keys) **PRD 18** Starter: Stripe billing per organisation (`docs/prds/18-starter-billing.md`).
+- [~] (pushed to the starter's main 2026-11-01; not yet run against Stripe test keys) **PRD 18** Starter: Stripe billing per organisation (`docs/prds/18-starter-billing.md`).
 - [ ] **PRD 19** Starter: the affiliate program (`docs/prds/19-starter-affiliates.md`).
       Needs 18.
 - [ ] **PRD 20** Starter: ships with the kit, a GM and an affiliates desk
@@ -107,8 +107,8 @@ they're claimed.
 
 ## Needs you
 
-- **Ship rights.** `main` was pushed to `origin` once, on 30 Oct, with Doug's yes. Each
-  push still needs his yes. GitHub's repo is public, so no client facts go in.
+- **Ship rights.** `main` was pushed to `origin` on 30 Oct and 1 Nov (with the starter), each
+  time with Doug's yes. Each push still needs his yes. GitHub's repo is public, so no client facts go in.
 - **Live desks.** Moving each project's live desks onto the listener,
   and off Gmail, is project work. Each one needs your yes.
 - **Cloudflare.** Deploying the kit's mail Worker for a project (D1, routing rules, DNS,
