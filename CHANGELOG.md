@@ -4,6 +4,12 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-01
 
+### The watchdog shows what you approved that nobody has sent · Fixed
+- Actions you approved that still haven't gone a day later now show under "Stalled" in
+  `status`, one line per desk: how many, the oldest, and what fixes it (open the desk's
+  chat, or send them). Before, the watchdog only counted a desk's due tasks and checks, so
+  approved sends could sit for days with nobody told.
+
 ### An affiliates desk recruits, onboards and pays affiliates (PRD 17) · New
 - Say "set up an affiliates desk" and `new-desk` starts from the affiliates type. It asks
   whether the product has a program yet, who makes a good affiliate, the desk's own address

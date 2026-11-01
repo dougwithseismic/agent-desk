@@ -70,4 +70,7 @@ becomes a line in the person's brief instead.
 Each row says what fixes it. Do what the GM may (`mandate.md`): brief a desk again about a late
 brief, audit what went out alone, ask a desk to measure its headline. Anything stuck `sending`
 or `uncertain` belongs to the desk that sent it: tell it, or the person, and never settle it
-yourself. What the GM can't fix goes in the person's brief under "Stuck".
+yourself. An `approved, not sent` row is a desk sitting on the person's yes for over a day.
+Never send another desk's actions: start the desk as above, since its own chat sends them, or
+put it in the person's brief if the desk is listening or was already started. What the GM
+can't fix goes in the person's brief under "Stuck".

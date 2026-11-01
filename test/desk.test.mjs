@@ -2265,6 +2265,31 @@ test('the watchdog lists late briefs, stuck sends, late audits, stale headlines 
   assert.equal((await stalled(p, 'check overdue')).length, 0);
 });
 
+test('the watchdog lists a desk with approved actions nobody has sent for a day, until they go', async () => {
+  const p = await project({ partners: {}, seo: {} });
+  const [first, second, third] = [await create(p), await create(p), await create(p)];
+  for (const id of [first, second, third]) await p.sql(approve(id));
+  assert.equal((await stalled(p, 'approved, not sent')).length, 0, 'approved today is not stalled yet');
+
+  const [t28, t26, t25] = [28, 26, 25].map((h) => minutesAgo(h * 60));
+  await p.sql(`UPDATE actions SET approved_at = ${q(t28)} WHERE id = ${first};
+    UPDATE actions SET approved_at = ${q(t25)} WHERE id = ${second}`);
+  const fix = 'open its chat (/desk seo listen) or send them (kit/playbooks/actions.md)';
+  assert.deepEqual(await stalled(p, 'approved, not sent'), [{ desk: 'seo', about: 'desk:seo', what: `2 approved and unsent, oldest #${first}`, fix }]);
+  assert.equal((await p.one("SELECT since FROM watchdog WHERE problem = 'approved, not sent'")).since, t28);
+
+  // Without approved_at, it counts from the action's last change.
+  await p.sql(`UPDATE actions SET approved_at = NULL, updated_at = ${q(t26)} WHERE id = ${third}`);
+  assert.equal((await stalled(p, 'approved, not sent'))[0].what, `3 approved and unsent, oldest #${first}`);
+
+  // Each one sent leaves the row; the last one sent clears it.
+  await p.sql(`${claim(first)}\n${land(first)}`);
+  assert.equal((await stalled(p, 'approved, not sent'))[0].what, `2 approved and unsent, oldest #${third}`);
+  assert.equal((await p.one("SELECT since FROM watchdog WHERE problem = 'approved, not sent'")).since, t26);
+  for (const id of [second, third]) await p.sql(`${claim(id)}\n${land(id)}`);
+  assert.equal((await stalled(p, 'approved, not sent')).length, 0);
+});
+
 test('status shows the watchdog, a missed round, and how each desk starts', async () => {
   const p = await project({ partners: { round: 'daily 00:00', start: 'scheduled-task partners-desk' }, seo: { round: 'daily 00:00' } });
   // Desks made today haven't missed today's midnight round.

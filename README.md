@@ -58,10 +58,10 @@ the desks on what to do next. Then it writes you one brief with yes-or-no questi
 briefs; it doesn't do (see the guards below).
 
 A watchdog notices stalled work without anyone looking: a desk with work and nobody listening,
-a round missed, a brief past its due, a send stuck or uncertain, audits left undone, a headline
-nobody measured. `status` shows it, with what fixes each. With your yes, each desk gets a
-scheduled task in the Claude Code app (`Start:` in its `desk.md`), and the GM starts a desk
-when it has work and nobody is listening.
+a round missed, approved actions nobody sent for a day, a brief past its due, a send stuck or
+uncertain, audits left undone, a headline nobody measured. `status` shows it, with what fixes
+each. With your yes, each desk gets a scheduled task in the Claude Code app (`Start:` in its
+`desk.md`), and the GM starts a desk when it has work and nobody is listening.
 
 ### An affiliates desk
 

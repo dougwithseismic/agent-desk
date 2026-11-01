@@ -524,6 +524,15 @@ CREATE VIEW watchdog AS
   JOIN (SELECT desk, count(*) AS n, min(due) AS since FROM due WHERE owner = 'agent' GROUP BY desk) w
     ON w.desk = u.desk
   UNION ALL
+  SELECT g.desk, 'approved, not sent', 'desk:' || g.desk,
+    g.n || ' approved and unsent, oldest #' || (SELECT x.id FROM actions x WHERE x.desk = g.desk AND x.status = 'approved'
+      ORDER BY coalesce(x.approved_at, x.updated_at), x.id LIMIT 1),
+    g.since,
+    'open its chat (/desk ' || g.desk || ' listen) or send them (kit/playbooks/actions.md)'
+  FROM (SELECT desk, count(*) AS n, min(coalesce(approved_at, updated_at)) AS since FROM actions
+        WHERE status = 'approved' AND coalesce(approved_at, updated_at) < strftime('%Y-%m-%dT%H:%M:%fZ','now','-24 hours')
+        GROUP BY desk) g
+  UNION ALL
   SELECT b.to_desk, 'brief overdue', 'brief:' || b.action_id,
     'brief #' || b.action_id || ' from ' || b.from_desk || ' (' || b.title || ') is still open'
       || CASE WHEN b.due IS NOT NULL THEN ', due ' || b.due ELSE ' after ' || cast(b.days AS INTEGER) || ' days' END,
