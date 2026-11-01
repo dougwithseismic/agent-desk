@@ -20,7 +20,9 @@ The database does the guarding. It refuses:
 - an approval of a version the person didn't see;
 - anything while someone else holds the lock, or while a hold applies;
 - changing what was already attempted;
-- any edit of the log.
+- any edit of the log;
+- an agent working under its own name approving, allowing, releasing someone else's hold,
+  loosening trust, or giving another desk a task other than through a brief.
 
 When it refuses, read the message and do what it says. Never work around it.
 
@@ -32,7 +34,8 @@ When it refuses, read the message and do what it says. Never work around it.
 2. Pick the desk: the one they named, or the only one, or ask. If they asked it to listen
    ("/desk <name> listen"), open it as below, then go on to "Listening".
 3. Read `desks/<name>/desk.md`: purpose, headline, what it may do, its round, criteria,
-   limits, sources. It overrides anything general here. Read a playbook only when the
+   limits, sources. It overrides anything general here. If it has an `Agent:` line, run
+   every `desk.mjs` command for this desk with `--as <that name>` (below). Read a playbook only when the
    next step needs it.
 4. Catch up quietly. Read recent lessons and active holds. Check anything `uncertain`, or
    `sending` for more than a few minutes, against the provider before anything else. Pick
@@ -153,7 +156,11 @@ chat stops: background or scheduled runs only when asked, as with listening.
   heredoc (`node desks/desk.mjs sql - <<'SQL'`), so there are no quotes to escape. Put
   long text in a file and pass it with `-a body=@desks/data/<desk>/body.txt`.
 - `:me` is the person (DESK_USER), `:now` the time, `:today` the date, and `:desk` the
-  desk (`--desk <name>`, or the only one). `--json` gives rows to read; `--full` shows
+  desk (`--desk <name>`, or the only one). For a desk with an `Agent:` line you work under
+  that name: `node desks/desk.mjs --as gm ...`. Then `:me` is the agent and `:person` the
+  person you work for. What they say in this chat (an approval, an allow, more trust, a
+  release) goes in under `:person` with their words; your own work goes in under `:me`. Never
+  write `:person` for something they didn't say. `--json` gives rows to read; `--full` shows
   long values whole. `--expect-rows` exits 1 when the last statement gets no rows, so
   `&&` stops whatever comes next.
 - Lock what you're working on, if anyone else might touch it (`together.md`).

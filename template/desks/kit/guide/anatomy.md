@@ -51,6 +51,7 @@ Target: <the number they chose, and by when>
 Needs: <environment variables the round uses>
 Mail: <the desk's own email addresses, if it answers mail>
 Round: <when its round is due, if it runs on a schedule: weekdays 09:00>
+Agent: <the name its agent works under, if it has one: gm>
 
 ## Purpose
 What it's for, who it serves, who owns it, and what "working" looks like.
@@ -88,6 +89,12 @@ chat runs the round on its own: days (`daily`, `weekdays`, `weekends`, or names 
 `mon thu`) and 24-hour times on the listening machine's clock (`Round: mon thu 08:30, 14:00`).
 Leave it out and rounds happen when someone asks for one. `watch` also wakes the chat for the
 agent's tasks and checks as they come due, with or without either line.
+
+`Agent:` names the agent that works the desk, such as `gm`. `init` records it, and from then
+on the agent works with `--as gm`, so its work carries its own name and the database can
+tell it from the person's say-so (what that changes is in the desk skill). Give it a name
+no person uses. Leave the line out and the agent works as the person. Add it once the desk
+works without a person in the chat.
 
 ## schema.sql: the desk's own tables
 

@@ -25,6 +25,9 @@
 //   node desks/desk.mjs send <action id>          send an approved email action exactly as stored, and record it
 //
 // In SQL, :me is you (DESK_USER), :now the time, :today the date and :desk the --desk value.
+// An agent works under its own name with --as <name> (or DESK_AS in the environment), for a
+// desk whose desk.md says Agent: <name>. Then :me is the agent and :person the person it
+// works for (DESK_USER), whose say-so it records only in their own words.
 // Add your own with -a name=value, or -a name=@path to read a file, so long text needs no
 // escaping. --json prints rows as JSON; --full prints whole values, one row at a time.
 // --expect-rows exits 1 when the last statement returns or changes no rows, so a claim
@@ -36,6 +39,7 @@
 //   DESK_DB        file:desks/data/desk.db (the default), or https://<host> for a hosted database
 //   DESK_DB_TOKEN  the token for a hosted database: its secret, or a JWT from the token command
 //   DESK_USER      who you are: doug, sam
+//   DESK_AS        the agent you work as, like --as (read from the environment only)
 //   DESK_MAIL_URL  the mail Worker that desks with a Mail: line listen to (kit/mail/README.md)
 //   DESK_MAIL_TOKEN  that Worker's MAIL_API_TOKEN
 //   DESK_MAIL_PREFIX  the word inbox ids for mail start with: mail (the default), or the one
@@ -92,7 +96,11 @@ function hasSetting(name) {
 
 const DB = setting('DESK_DB', 'file:desks/data/desk.db');
 const TOKEN = setting('DESK_DB_TOKEN');
-const USER = setting('DESK_USER');
+const PERSON = setting('DESK_USER');
+let USER = PERSON; // who is working: the person, or the agent named by --as or DESK_AS
+let AGENT = null;
+const isPerson = (name) => Boolean(PERSON) && name === PERSON.toLowerCase();
+const isWord = (x) => /^[a-z][a-z0-9-]*$/.test(x);
 const HOSTED = /^(https?|libsql):\/\//.test(DB);
 const MAIL_URL = setting('DESK_MAIL_URL')?.replace(/\/+$/, '');
 const MAIL_TOKEN = setting('DESK_MAIL_TOKEN');
@@ -156,7 +164,7 @@ const WRITES = new Set(['INSERT', 'UPDATE', 'DELETE', 'REPLACE']);
 
 function autoParams(extra = {}) {
   const now = new Date().toISOString();
-  return { me: USER, now, today: now.slice(0, 10), ...extra };
+  return { me: USER, person: PERSON, now, today: now.slice(0, 10), ...extra };
 }
 
 function bindStatements(text, values) {
@@ -166,7 +174,7 @@ function bindStatements(text, values) {
     for (const p of s.params) {
       const name = p.slice(1);
       if (!(name in values) || values[name] === undefined) {
-        if (name === 'me') fail('the SQL uses :me but DESK_USER is not set. Put DESK_USER=<your name> in desks/.env');
+        if (name === 'me' || name === 'person') fail(`the SQL uses :${name} but DESK_USER is not set. Put DESK_USER=<your name> in desks/.env`);
         if (name === 'desk') fail('the SQL uses :desk: pass --desk <name> (it is filled in for you only when there is one desk)');
         fail(`the SQL uses ${p} but nothing was given for it: add -a ${name}=...`);
       }
@@ -418,6 +426,7 @@ function parseArgs(argv) {
     else if (a === '--expect-rows') flags.expectRows = true;
     else if (a === '--desk') flags.desk = argv[++i];
     else if (a === '--where') flags.where = argv[++i];
+    else if (a === '--as') flags.as = argv[++i] ?? fail('--as needs the name of an agent, from an Agent: line');
     else if (a === '--every' || a === '--max') flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a time, such as 30s or 25m`);
     else if (a === '--limit' || a === '--key') flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a value`);
     else if (a === '--mailbox') flags.mailbox = [...(flags.mailbox ?? []), argv[++i] ?? fail('--mailbox needs an address')];
@@ -444,8 +453,8 @@ function sha(text) {
 
 // A desk is a folder in desks/ with a desk.md. Its header lines before the first ##
 // can say Headline:, Target:, Needs: (env var names, comma separated), Mail: (the
-// addresses the desk answers, comma separated) and Round: (when its rounds are due, such as
-// weekdays 09:00).
+// addresses the desk answers, comma separated), Round: (when its rounds are due, such as
+// weekdays 09:00) and Agent: (the name its agent works under).
 function desksOnDisk() {
   return fs.readdirSync(DESKS, { withFileTypes: true })
     .filter((d) => d.isDirectory() && fs.existsSync(path.join(DESKS, d.name, 'desk.md')))
@@ -463,8 +472,13 @@ function desksOnDisk() {
         needs: (field('Needs') || '').split(/[,\s]+/).filter((x) => /^[A-Z][A-Z0-9_]*$/.test(x)),
         mail: [...new Set((field('Mail') || '').toLowerCase().split(/[,\s]+/).filter((x) => /^[^@<>]+@[^@<>]+\.[^@<>]+$/.test(x)))],
         round: field('Round'),
+        agent: field('Agent')?.toLowerCase(),
       };
-    });
+    })
+    .map((d) => ({ ...d, agentFault: !d.agent ? null
+      : !isWord(d.agent) ? `desks/${d.name}/desk.md: Agent: ${d.agent} is not a name: use letters, digits and dashes, such as gm`
+        : isPerson(d.agent) ? `desks/${d.name}/desk.md: Agent: ${d.agent} is you (DESK_USER): the database can't tell your say-so from its work, so give the agent a name of its own`
+          : null }));
 }
 
 // Addresses in more than one desk's Mail: line, with the desks that claim them.
@@ -497,6 +511,8 @@ export function ensureGitignore(desks = DESKS) {
 }
 
 async function init(flags) {
+  const disk = desksOnDisk();
+  for (const d of disk) if (d.agentFault) fail(d.agentFault);
   ensureGitignore();
   const db = await open();
   const me = USER || 'setup';
@@ -513,10 +529,12 @@ async function init(flags) {
     await execute(db, `${text};\nINSERT INTO migrations(name, checksum, by) VALUES (:n, :c, :by);`, { n: `core/${f}`, c: sha(text), by: me });
     done.push(`core/${f}`);
   }
-  for (const desk of desksOnDisk()) {
+  for (const desk of disk) {
     await execute(db, `INSERT INTO desks(name, title, headline, target) VALUES (:name, :title, :headline, :target)
-      ON CONFLICT(name) DO UPDATE SET title = excluded.title, headline = excluded.headline, target = excluded.target`,
-    { name: desk.name, title: desk.title, headline: desk.headline ?? null, target: desk.target ?? null });
+      ON CONFLICT(name) DO UPDATE SET title = excluded.title, headline = excluded.headline, target = excluded.target;
+      ${desk.agent ? 'INSERT INTO agents(name, desk, for_whom) VALUES (:agent, :name, :whom) ON CONFLICT DO NOTHING;' : ''}`,
+    { name: desk.name, title: desk.title, headline: desk.headline ?? null, target: desk.target ?? null,
+      ...(desk.agent && { agent: desk.agent, whom: PERSON || 'setup' }) });
     const schemaFile = path.join(desk.dir, 'schema.sql');
     if (fs.existsSync(schemaFile)) {
       const text = fs.readFileSync(schemaFile, 'utf8');
@@ -537,8 +555,25 @@ async function init(flags) {
   console.log(`Database ready: ${db.where} (${HOSTED ? 'hosted' : 'this machine'}), ${results[1].rows[0][0]} tables.`);
   console.log(names.length ? `Desks: ${names.join(', ')}.` : 'No desks yet: a desk is a folder in desks/ with a desk.md.');
   if (done.length) console.log(`Applied: ${done.join(', ')}.`);
-  if (!USER) console.log('Set DESK_USER=<your name> in desks/.env so your work is recorded as yours.');
+  if (!PERSON) console.log('Set DESK_USER=<your name> in desks/.env so your work is recorded as yours.');
   db.close();
+}
+
+// --as gm, or DESK_AS=gm: the agent works under its own name, which must be an agent's in
+// this database, so the guards that tell agents from people apply to it.
+async function workAs(flags, cmd) {
+  const name = (flags.as ?? process.env.DESK_AS)?.toLowerCase();
+  if (!name) return;
+  if (isPerson(name)) fail(`--as ${name} is you (DESK_USER): --as names an agent, from a desk's Agent: line`);
+  if (!['init', 'doctor', 'help', '--help', '-h', undefined].includes(cmd)) {
+    const db = await open();
+    let rows = [];
+    try { rows = (await execute(db, 'SELECT desk FROM agents WHERE name = :name', { name })).results[0].rows; } catch {}
+    db.close();
+    if (!rows.length) fail(`${name} isn't an agent in this database: put "Agent: ${name}" in its desk's desk.md and run node desks/desk.mjs init`);
+  }
+  AGENT = name;
+  USER = name;
 }
 
 // Whether a desk's listener is looking: someone holds listen:<desk> and it looked lately. A
@@ -570,17 +605,19 @@ async function status(flags, deskName) {
     SELECT desk, by, since, looked_at FROM listening WHERE ${f()};
     SELECT to_desk AS desk, count(*) AS open, max(days) AS oldest_days FROM briefs
       WHERE task_status = 'open' AND (:d IS NULL OR to_desk = :d) GROUP BY to_desk;
+    SELECT name, desk, for_whom FROM agents WHERE ${f()} ORDER BY desk, name;
   `, v);
   if (flags.json) {
-    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening', 'briefs'];
+    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening', 'briefs', 'agents'];
     console.log(JSON.stringify(Object.fromEntries(results.map((r, i) => [names[i], asObjects(r.cols, r.rows)])), null, 2));
     db.close();
     return;
   }
-  const [board, waiting, due, flight, locks, holds, trust, lessons, listening, briefs] = results;
+  const [board, waiting, due, flight, locks, holds, trust, lessons, listening, briefs, agents] = results;
   const heard = new Map(listening.rows.map(([d, by, , looked]) => [d, { by, looked }]));
   const briefed = new Map(briefs.rows.map(([d, n, days]) => [d, { n, days }]));
-  console.log(`${HOSTED ? 'Hosted' : 'Local'} database ${db.where}, you are ${USER ?? '(DESK_USER not set)'}.`);
+  const you = AGENT ? `${AGENT}, an agent working for ${PERSON ?? '(DESK_USER not set)'}` : USER ?? '(DESK_USER not set)';
+  console.log(`${HOSTED ? 'Hosted' : 'Local'} database ${db.where}, you are ${you}.`);
   if (!board.rows.length) console.log(desk ? `No desk called ${desk}: run init after adding desks/${desk}/desk.md.` : 'No desks yet.');
   for (const r of board.rows) {
     const [name, w, d, fl, u, l, headline, value, previous, target] = r;
@@ -596,6 +633,7 @@ async function status(flags, deskName) {
     if (target) line += ` · target ${target}`;
     console.log(line);
   }
+  if (agents.rows.length) console.log(`Agents: ${agents.rows.map(([n, d, w]) => `${n} works ${d} for ${w}`).join('; ')}.`);
   // Long lists show their first rows and say how to see the rest. --json has them all.
   const section = (title, r, limit, rest) => {
     if (!r.rows.length) return;
@@ -688,7 +726,7 @@ function mailSettings() {
     .filter(([, v]) => !v).map(([n, , what]) => `${n}=${what}`);
   if (missing.length) fail(`set ${missing.join(' and ')} in desks/.env (kit/mail/README.md)`);
   if (!/^https?:\/\/[^/]/.test(MAIL_URL)) fail(`DESK_MAIL_URL should start with https:// (it's the mail Worker's address), not "${MAIL_URL}"`);
-  if (!/^[a-z][a-z0-9-]*$/.test(MAIL_PREFIX)) fail(`DESK_MAIL_PREFIX is the one word inbox ids for mail start with, such as mail or acme-mail, not "${line1(MAIL_PREFIX)}"`);
+  if (!isWord(MAIL_PREFIX)) fail(`DESK_MAIL_PREFIX is the one word inbox ids for mail start with, such as mail or acme-mail, not "${line1(MAIL_PREFIX)}"`);
 }
 
 // One request to the project's mail Worker (kit/mail/README.md): its HTTP status and its
@@ -1360,7 +1398,9 @@ async function doctor() {
       bad(`desks/data here is the worktree's own folder, so its files go when the worktree does: move them into ${path.join(MAIN, 'desks/data')} and remove it`);
     }
   }
-  USER ? ok(`you are ${USER}`) : bad('DESK_USER is not set: put DESK_USER=<your name> in desks/.env');
+  PERSON ? ok(`you are ${PERSON}`) : bad('DESK_USER is not set: put DESK_USER=<your name> in desks/.env');
+  const disk = desksOnDisk();
+  for (const d of disk) if (d.agentFault) bad(d.agentFault);
   if (HOSTED && !TOKEN) bad('DESK_DB_TOKEN is not set: a hosted database needs its token in desks/.env');
 
   let db;
@@ -1393,9 +1433,15 @@ async function doctor() {
     if (applied.size) {
       const core = fs.readFileSync(path.join(KIT, 'core.sql'), 'utf8');
       applied.get('core/core.sql') === sha(core) ? ok('core schema is current') : bad('the kit changed since the last init: run node desks/desk.mjs init');
+      for (const f of migrationFiles(path.join(KIT, 'migrations'))) {
+        if (!applied.has(`core/${f}`)) bad(`core migration ${f} not applied: run node desks/desk.mjs init`);
+      }
       const known = new Set((await execute(db, 'SELECT name FROM desks')).results[0].rows.map((r) => r[0]));
-      for (const desk of desksOnDisk()) {
+      let agents = new Set();
+      try { agents = new Set((await execute(db, "SELECT name || '/' || desk FROM agents")).results[0].rows.map((r) => r[0])); } catch {}
+      for (const desk of disk) {
         if (!known.has(desk.name)) { bad(`${desk.name}: not in the database yet: run init`); continue; }
+        if (desk.agent && !agents.has(`${desk.agent}/${desk.name}`)) bad(`${desk.name}: Agent: ${desk.agent} is not in the database yet: run init`);
         const schemaFile = path.join(desk.dir, 'schema.sql');
         if (fs.existsSync(schemaFile) && applied.get(`${desk.name}/schema.sql`) !== sha(fs.readFileSync(schemaFile, 'utf8'))) {
           bad(`${desk.name}: schema.sql changed since the last init: run init (a changed column needs a file in ${desk.name}/migrations/)`);
@@ -1512,6 +1558,7 @@ async function main() {
   const { flags, rest } = parseArgs(process.argv.slice(2));
   const [cmd, ...args] = rest;
   linkWorktreeData();
+  await workAs(flags, cmd);
   switch (cmd) {
     case 'init': return init(flags);
     case 'status': return status(flags, args[0]);

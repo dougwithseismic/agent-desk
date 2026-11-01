@@ -23,6 +23,16 @@ CREATE TABLE IF NOT EXISTS desks (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- The agents that work desks under their own names (desk.md's Agent: line, recorded by init).
+-- A name here is an agent everywhere in this database; any other name is a person.
+CREATE TABLE IF NOT EXISTS agents (
+  name TEXT NOT NULL,                   -- gm: what --as and DESK_AS say
+  desk TEXT NOT NULL REFERENCES desks(name),
+  for_whom TEXT NOT NULL,               -- the person who ran init: doug
+  at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (name, desk)
+);
+
 -- Schema files applied by init.
 CREATE TABLE IF NOT EXISTS migrations (
   name TEXT PRIMARY KEY,                -- core/002-x.sql, seo/schema.sql
@@ -80,7 +90,7 @@ CREATE TABLE IF NOT EXISTS trust (
   since_check INTEGER NOT NULL DEFAULT 0,   -- automatic sends since a person last reviewed one
   check_every INTEGER NOT NULL DEFAULT 5,   -- every 5th is shown in full
   epoch INTEGER NOT NULL DEFAULT 0,         -- goes up on every edit or rejection
-  note TEXT,                                -- e.g. trust granted directly, with their words
+  note TEXT,                                -- what the person said when they last changed it
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   PRIMARY KEY (desk, kind, channel, identity)
 );
@@ -541,6 +551,8 @@ CREATE TRIGGER action_approve BEFORE UPDATE OF status ON actions
 WHEN NEW.status = 'approved' AND OLD.status IS NOT 'approved'
 BEGIN
   SELECT RAISE(ABORT, 'say who approved it: set approved_by') WHERE NEW.approved_by IS NULL;
+  SELECT RAISE(ABORT, 'an agent can''t approve: approved_by is the person who said yes, and approval_words what they said')
+    WHERE NEW.approved_by IN (SELECT name FROM agents);
   SELECT RAISE(ABORT, 'this changed since it was shown: show the current version and ask again')
     WHERE NEW.approved_version IS NOT OLD.version;
 END;
@@ -721,6 +733,107 @@ BEGIN
       json_object('task', NEW.id, 'status', NEW.status, 'result', NEW.result, 'proof', NEW.proof)
     FROM actions a WHERE a.id = CAST(substr(NEW.source, 7) AS INTEGER) AND 'brief:' || a.id = NEW.source;
 END;
+
+-- Agents tighten, people loosen. An agent (a name in agents) can hold work, revoke what's
+-- allowed and take trust away on its own. Approving, allowing, releasing someone else's hold
+-- and loosening trust are a person's say-so, recorded under their name with their words.
+-- Like every guard here this stops mistakes: an agent that writes a person's name isn't stopped.
+DROP TRIGGER IF EXISTS agent_kept;
+CREATE TRIGGER agent_kept BEFORE DELETE ON agents
+BEGIN SELECT RAISE(ABORT, 'an agent stays an agent: its name is on its work'); END;
+DROP TRIGGER IF EXISTS agent_fixed;
+CREATE TRIGGER agent_fixed BEFORE UPDATE ON agents
+BEGIN SELECT RAISE(ABORT, 'an agent stays an agent: its name is on its work'); END;
+
+DROP TRIGGER IF EXISTS allowed_by_person;
+CREATE TRIGGER allowed_by_person BEFORE INSERT ON allowed WHEN NEW.by IN (SELECT name FROM agents)
+BEGIN SELECT RAISE(ABORT, 'only a person allows work to go alone: by is the person, and words what they said'); END;
+-- What a person allowed stays as they said it, so a revoke is never undone or widened.
+DROP TRIGGER IF EXISTS allowed_kept;
+CREATE TRIGGER allowed_kept BEFORE UPDATE ON allowed
+WHEN NEW.desk IS NOT OLD.desk OR NEW.kind IS NOT OLD.kind OR NEW.channel IS NOT OLD.channel
+  OR NEW.identity IS NOT OLD.identity OR NEW.scope IS NOT OLD.scope OR NEW.words IS NOT OLD.words
+  OR NEW.by IS NOT OLD.by OR NEW.at IS NOT OLD.at OR NEW.expires_at IS NOT OLD.expires_at
+  OR (OLD.revoked_at IS NOT NULL AND (NEW.revoked_at IS NOT OLD.revoked_at OR NEW.revoked_by IS NOT OLD.revoked_by))
+BEGIN SELECT RAISE(ABORT, 'what a person allowed stays as they said it: revoke it and allow again with a new row'); END;
+
+-- A hold stays as it was placed and ends by being released, saying who ended it. An agent
+-- releases only its own.
+DROP TRIGGER IF EXISTS hold_kept;
+CREATE TRIGGER hold_kept BEFORE UPDATE ON holds
+BEGIN
+  SELECT RAISE(ABORT, 'a hold stays as it was placed: release it and place a new one')
+    WHERE NEW.desk IS NOT OLD.desk OR NEW.about IS NOT OLD.about OR NEW.topic IS NOT OLD.topic
+      OR NEW.until IS NOT OLD.until OR NEW.by IS NOT OLD.by OR NEW.at IS NOT OLD.at
+      OR (OLD.released_at IS NOT NULL AND (NEW.released_at IS NOT OLD.released_at OR NEW.released_by IS NOT OLD.released_by));
+  SELECT RAISE(ABORT, 'say who released it: set released_by')
+    WHERE NEW.released_at IS NOT NULL AND OLD.released_at IS NULL AND NEW.released_by IS NULL;
+  SELECT RAISE(ABORT, 'an agent releases only its own holds: the person who placed it, or one they ask, releases it')
+    WHERE NEW.released_at IS NOT NULL AND OLD.released_at IS NULL AND NEW.released_by IS NOT OLD.by
+      AND NEW.released_by IN (SELECT name FROM agents);
+END;
+DROP TRIGGER IF EXISTS hold_not_deleted;
+CREATE TRIGGER hold_not_deleted BEFORE DELETE ON holds
+BEGIN SELECT RAISE(ABORT, 'a hold is released, not deleted: set released_at, released_by and release_reason'); END;
+
+-- Loosening trust needs last_by naming a person and a new note of what they said:
+-- fewer clean sends or less coaching needed, rarer spot checks, no longer always a person's,
+-- trusted before the count, the spot-check count put back, or counts jumped. The database's
+-- own counting (one at a time, or a reset) and taking trust away are anyone's.
+DROP TRIGGER IF EXISTS trust_loosened;
+CREATE TRIGGER trust_loosened BEFORE UPDATE ON trust
+WHEN NEW.needed < OLD.needed OR NEW.coach_needed < OLD.coach_needed OR NEW.check_every > OLD.check_every
+  OR NEW.always_human < OLD.always_human OR (NEW.trusted > OLD.trusted AND NEW.clean < NEW.needed)
+  OR (NEW.since_check < OLD.since_check AND NEW.clean <= OLD.clean AND NEW.epoch = OLD.epoch)
+  OR NEW.clean > OLD.clean + 1 OR NEW.coached > OLD.coached + 1
+BEGIN
+  SELECT RAISE(ABORT, 'only a person loosens trust: set last_by to the person and note to what they said')
+    WHERE NEW.last_by IS NULL OR NEW.last_by IN (SELECT name FROM agents)
+      OR trim(coalesce(NEW.note, '')) = '' OR NEW.note IS OLD.note;
+END;
+-- A new trust row looser than the table's defaults (5 clean, 2 coached, check every 5) is
+-- the same. A row that exists already is changed through trust_loosened.
+DROP TRIGGER IF EXISTS trust_started;
+CREATE TRIGGER trust_started BEFORE INSERT ON trust
+WHEN (NEW.needed < 5 OR NEW.coach_needed < 2 OR NEW.check_every > 5 OR NEW.trusted = 1
+    OR NEW.clean > 0 OR NEW.coached > 0)
+  AND NOT EXISTS (SELECT 1 FROM trust t WHERE t.desk = NEW.desk AND t.kind = NEW.kind
+    AND t.channel = NEW.channel AND t.identity = NEW.identity)
+BEGIN
+  SELECT RAISE(ABORT, 'only a person loosens trust: set last_by to the person and note to what they said')
+    WHERE NEW.last_by IS NULL OR NEW.last_by IN (SELECT name FROM agents) OR trim(coalesce(NEW.note, '')) = '';
+END;
+-- What a person said about trust goes in the log, with the settings it left.
+DROP TRIGGER IF EXISTS trust_said;
+CREATE TRIGGER trust_said AFTER UPDATE OF note ON trust
+WHEN NEW.note IS NOT OLD.note AND NEW.note IS NOT NULL AND NEW.last_by IS NOT NULL
+BEGIN
+  INSERT INTO log(desk, by, kind, summary, details) VALUES (NEW.desk, NEW.last_by, 'trust',
+    'trust for ' || NEW.kind || ' (' || NEW.channel || ', ' || NEW.identity || '): ' || NEW.note,
+    json_object('needed', NEW.needed, 'coach_needed', NEW.coach_needed, 'check_every', NEW.check_every,
+      'always_human', NEW.always_human, 'trusted', NEW.trusted, 'was', json_object('needed', OLD.needed,
+      'coach_needed', OLD.coach_needed, 'check_every', OLD.check_every, 'always_human', OLD.always_human,
+      'trusted', OLD.trusted)));
+END;
+DROP TRIGGER IF EXISTS trust_said_new;
+CREATE TRIGGER trust_said_new AFTER INSERT ON trust WHEN NEW.note IS NOT NULL AND NEW.last_by IS NOT NULL
+BEGIN
+  INSERT INTO log(desk, by, kind, summary, details) VALUES (NEW.desk, NEW.last_by, 'trust',
+    'trust for ' || NEW.kind || ' (' || NEW.channel || ', ' || NEW.identity || '): ' || NEW.note,
+    json_object('needed', NEW.needed, 'coach_needed', NEW.coach_needed, 'check_every', NEW.check_every,
+      'always_human', NEW.always_human, 'trusted', NEW.trusted));
+END;
+
+-- An agent gives its own desk tasks, for itself or a person. Another desk gets work from it
+-- as a brief, and a task stays on the desk it was given to.
+DROP TRIGGER IF EXISTS task_agent_desk;
+CREATE TRIGGER task_agent_desk BEFORE INSERT ON tasks
+WHEN coalesce(NEW.source, '') NOT LIKE 'brief:%' AND NEW.created_by IN (SELECT name FROM agents)
+  AND NOT EXISTS (SELECT 1 FROM agents WHERE name = NEW.created_by AND desk = NEW.desk)
+BEGIN SELECT RAISE(ABORT, 'an agent gives another desk work with a brief, not a task: kit/playbooks/briefs.md'); END;
+DROP TRIGGER IF EXISTS task_stays;
+CREATE TRIGGER task_stays BEFORE UPDATE OF desk ON tasks WHEN NEW.desk IS NOT OLD.desk
+BEGIN SELECT RAISE(ABORT, 'a task stays on its desk: drop it here and brief the other desk'); END;
 
 DROP TRIGGER IF EXISTS action_touched;
 CREATE TRIGGER action_touched AFTER UPDATE ON actions WHEN NEW.updated_at IS OLD.updated_at

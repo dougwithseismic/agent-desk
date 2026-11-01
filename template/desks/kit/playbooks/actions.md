@@ -86,9 +86,14 @@ Send, change or drop?
 **Send / yes / looks good.** This approves the version they saw:
 
 ```sql
-UPDATE actions SET status = 'approved', approved_by = :me, approved_version = 1,
+UPDATE actions SET status = 'approved', approved_by = :person, approved_version = 1,
   approval_words = 'yes send it', last_by = :me WHERE id = 12;
 ```
+
+`:person` is the person you work for and `:me` is you. They're the same unless the desk has
+an agent of its own (`Agent:` in `desk.md`, and `--as`). An approval is theirs, so it goes
+under `:person`, and only with words they said in this chat. The database refuses an
+approval in an agent's name.
 
 If anything changed since they saw it, the database refuses with "this changed since it
 was shown". Show the current version and ask again. "Send 3 and 5" approves those two
@@ -208,10 +213,13 @@ in their words, for that kind, channel and identity:
 ```sql
 INSERT INTO allowed(desk, kind, channel, identity, scope, words, by)
 VALUES ('outreach', 'email-reply', 'email', 'doug@partners.example.com',
-  'replies in existing threads; nothing about money', 'yeah let routine replies go', :me);
+  'replies in existing threads; nothing about money', 'yeah let routine replies go', :person);
 -- taking it back
 UPDATE allowed SET revoked_at = :now, revoked_by = :me WHERE id = 3;
 ```
+
+A row stays as they said it. To widen, narrow or extend one, revoke it and add a new row in
+their words. Anyone can revoke, an agent included; only a person allows.
 
 Other things they can say:
 
@@ -223,11 +231,17 @@ Other things they can say:
 A trust row appears with the first action of its kind, so set these with an upsert:
 
 ```sql
-INSERT INTO trust(desk, kind, channel, identity, coach_needed, note)
-VALUES ('outreach', 'email-reply', 'email', 'doug@partners.example.com', 0, 'Doug: just write it (17 Oct)')
-ON CONFLICT(desk, kind, channel, identity) DO UPDATE SET coach_needed = 0, note = excluded.note;
--- "always ask me": always_human = 1     given directly: trusted = 1, note = '<their words>'
+INSERT INTO trust(desk, kind, channel, identity, coach_needed, last_by, note)
+VALUES ('outreach', 'email-reply', 'email', 'doug@partners.example.com', 0, :person, 'just write it')
+ON CONFLICT(desk, kind, channel, identity) DO UPDATE SET coach_needed = 0,
+  last_by = excluded.last_by, note = excluded.note;
+-- "always ask me": always_human = 1     given directly: trusted = 1
 ```
+
+Loosening trust (less coaching, fewer clean sends needed, rarer spot checks, no longer always
+a person's, trusted early) needs `last_by` naming the person and `note` with what they said
+this time. The database refuses it otherwise, and logs what they said. Taking trust away,
+such as `always_human = 1`, is anyone's. The counts are the database's: don't set them.
 
 An `allowed` row and the trust ladder carry over between sessions and people: don't ask
 again just because a new chat started. Ask only when it's missing, revoked, expired or
@@ -246,3 +260,5 @@ doesn't cover this action.
 | that status change is not allowed | Read the path in the message; failed and rejected are final, so make a new action |
 | already attempted ... content cannot change | Make a new action with a new key |
 | the log is never changed | Add a new log row that corrects it |
+| an agent can't approve / only a person allows / only a person loosens trust | Ask the person. Record what they say under `:person`, with their words |
+| an agent releases only its own holds | Tell the person which hold, and why you'd release it |

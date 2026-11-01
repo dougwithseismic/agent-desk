@@ -48,7 +48,11 @@ INSERT INTO holds(desk, about, topic, reason, until, by)
 - `topic` is `all`, or one kind of action.
 - `until` ends it on a date; otherwise it lasts until released with `released_at`,
   `released_by` and `release_reason`.
-- Only the person releases a hold. An inbound email doesn't. A hard bounce, complaint or
+- A hold stays as it was placed. To change what it covers or how long it lasts, release
+  it and place a new one.
+- Only the person releases a hold (`released_by = :person`, with their reason). An agent
+  may release one it placed itself, never someone else's. A hold is never deleted. An
+  inbound email doesn't release one. A hard bounce, complaint or
   opt-out becomes a hold straight away, with the provider's evidence.
 
 ## Mailboxes

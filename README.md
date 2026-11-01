@@ -70,7 +70,8 @@ other's people, holds and work.
 - **Shared:** a [libsql-server](https://github.com/tursodatabase/libsql) service on
   Railway with a volume and one token, set up in one step from the
   [Hosted SQLite (libSQL)](https://railway.com/deploy/hosted-sqlite-libsql) template.
-  There are no accounts to manage. Each person sets `DESK_USER` and works as themselves.
+  There are no accounts to manage. Each person sets `DESK_USER` and works as themselves,
+  and an agent named in a desk's `Agent:` line works under its own name (`--as <name>`).
   `kit/playbooks/hosting.md` has the steps, plus backups and moving between the two.
 
 The same SQL runs in both modes. A multi-statement write is all-or-nothing in both.
@@ -88,6 +89,15 @@ database refuses:
 - a second claim on an action;
 - changes to what was already attempted;
 - any edit of the log.
+
+An agent working under its own name makes things safer on its own: it can place holds,
+revoke what's allowed and take trust away. Giving it more room is a person's say-so, so the
+database refuses an agent that approves, allows work to go alone, releases someone else's
+hold, loosens trust, or gives another desk a task other than through a brief. Loosening trust
+needs the person's name and their words, and goes in the log.
+
+These guards stop mistakes. They aren't security: an agent that writes a person's name on
+purpose isn't stopped, and anyone with the database can change it.
 
 Trust is earned per kind of action, channel and identity:
 

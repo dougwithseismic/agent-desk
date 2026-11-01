@@ -4,6 +4,19 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-01
 
+### A desk's agent works under its own name, and only a person gives it more room (PRD 12) · New
+- Put `Agent: gm` in a desk's `desk.md` and run `init`. The agent then works with `--as gm`
+  (or `DESK_AS=gm`), so the database can tell its work from the person's say-so.
+- An agent can make things safer on its own: place holds, release its own, take back what
+  was allowed, reset trust. Approving an action, letting work go alone, loosening trust and
+  releasing someone else's hold need the person, in their own words.
+- Trust that's loosened now records who said so and what they said, in the log.
+- An agent gives another desk work with a brief, not a task. A task stays on its desk.
+- What a person allowed and the holds placed now stay as written: to change one, revoke or
+  release it and add a new one.
+- `status` says who you are and lists each desk's agent; `doctor` says what an agent still
+  needs. These guards stop mistakes; they aren't security.
+
 ### One desk can hand work to another with a brief (PRD 11) · New
 - A desk writes a brief for another desk: the job, why it matters, and how both will know
   it's done. Once it's approved, `node desks/desk.mjs send <id>` delivers it as a task on

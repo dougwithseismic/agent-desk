@@ -62,7 +62,7 @@ async function wipeHosted(dir) {
 }
 
 // A project with desks/ from the kit and one folder per desk.
-async function project(desks = { seo: {} }) {
+async function project(desks = { seo: {} }, { init: initNow = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
   dirs.push(dir);
   fs.cpSync(KIT, path.join(dir, 'desks'), { recursive: true, filter: (src) => !src.startsWith(path.join(KIT, 'kit', 'mail')) });
@@ -72,6 +72,7 @@ async function project(desks = { seo: {} }) {
     if (d.needs) head.push(`Needs: ${d.needs}`);
     if (d.mail) head.push(`Mail: ${d.mail}`);
     if (d.round) head.push(`Round: ${d.round}`);
+    if (d.agent) head.push(`Agent: ${d.agent}`);
     fs.writeFileSync(path.join(dir, 'desks', name, 'desk.md'), `${head.join('\n')}\n\n## Purpose\nTesting.\n`);
     if (d.schema) fs.writeFileSync(path.join(dir, 'desks', name, 'schema.sql'), d.schema);
   }
@@ -79,9 +80,9 @@ async function project(desks = { seo: {} }) {
     dir,
     run: (args, opts) => run(dir, args, opts),
     // Run SQL and return the rows of the last statement that has any.
-    async sql(text, { user, args = {} } = {}) {
+    async sql(text, { user, args = {}, as } = {}) {
       const a = Object.entries(args).flatMap(([k, v]) => ['-a', `${k}=${v}`]);
-      const r = await run(dir, ['sql', '--json', ...a, '-'], { user, input: text });
+      const r = await run(dir, ['sql', '--json', ...(as ? ['--as', as] : []), ...a, '-'], { user, input: text });
       if (r.code !== 0) throw new Error(r.err.trim());
       const out = r.out.trim() ? JSON.parse(r.out) : [];
       if (!out.length || !('statement' in out[0])) return out;
@@ -97,6 +98,7 @@ async function project(desks = { seo: {} }) {
     },
   };
   if (HOSTED) await wipeHosted(dir);
+  if (!initNow) return p;
   const init = await p.run(['init']);
   assert.equal(init.code, 0, init.err);
   return p;
@@ -155,7 +157,7 @@ test('init is safe to repeat and sets up the core and each desk', async () => {
   assert.equal(again.code, 0, again.err);
   assert.match(again.out, /Desks: seo\./);
   const names = (await p.sql('SELECT name FROM migrations ORDER BY name')).map((r) => r.name);
-  assert.deepEqual(names, ['core/core.sql', 'seo/schema.sql']);
+  assert.deepEqual(names, ['core/001-trust-by.sql', 'core/core.sql', 'seo/schema.sql']);
   assert.deepEqual(await p.sql("INSERT INTO seo_pages VALUES ('/x', 3); SELECT * FROM seo_pages"), [{ path: '/x', clicks: 3 }]);
   const desk = await p.one('SELECT * FROM desks');
   assert.equal(desk.headline, 'clicks-7d');
@@ -479,7 +481,8 @@ test('the trust ladder: two coached, five clean, then on its own with a spot che
 
 test('a change after review starts trust again, and an approval from before does not count', async () => {
   const p = await project();
-  await p.sql("INSERT INTO trust(desk, kind, channel, identity, coach_needed) VALUES ('seo', 'email-reply', 'email', 'doug@x.com', 0)");
+  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coach_needed, last_by, note)
+    VALUES ('seo', 'email-reply', 'email', 'doug@x.com', 0, 'doug', 'just write it')`);
   const older = await create(p);
   await p.sql(approve(older));
   for (let i = 0; i < 2; i++) await p.sql(humanSend(await create(p)));
@@ -496,13 +499,13 @@ test('a change after review starts trust again, and an approval from before does
   assert.equal((await trustRow(p)).clean, 0, 'approved before the reset, so it does not count');
   await p.sql(humanSend(await create(p)));
   assert.equal((await trustRow(p)).clean, 1);
-  assert.equal((await p.one("SELECT count(*) AS n FROM log WHERE kind = 'trust'")).n, 1);
+  assert.equal((await p.one("SELECT count(*) AS n FROM log WHERE kind = 'trust' AND summary LIKE '%starts again%'")).n, 1);
 });
 
 test('always-human kinds never go out on their own', async () => {
   const p = await project();
-  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coach_needed, trusted, always_human)
-      VALUES ('seo', 'contract', 'email', 'doug@x.com', 0, 1, 1);
+  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coach_needed, trusted, always_human, last_by, note)
+      VALUES ('seo', 'contract', 'email', 'doug@x.com', 0, 1, 1, 'doug', 'trust it, but always ask me');
     INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('seo', 'contract', 'email', 'doug@x.com', 'go ahead', 'doug');`);
   await p.fails(claim(await create(p, { kind: 'contract', status: 'draft' }), 'auto'), /not trusted/);
   for (let i = 0; i < 6; i++) await p.sql(humanSend(await create(p, { kind: 'contract' })));
@@ -514,8 +517,8 @@ test('always-human kinds never go out on their own', async () => {
 
 test('trusted sends still stop for holds and for other people\'s locks', async () => {
   const p = await project();
-  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coach_needed, trusted, clean)
-      VALUES ('seo', 'digest', 'email', 'doug@x.com', 0, 1, 5);
+  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coach_needed, trusted, clean, last_by, note)
+      VALUES ('seo', 'digest', 'email', 'doug@x.com', 0, 1, 5, 'doug', 'the digest is fine');
     INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('seo', 'digest', 'email', 'doug@x.com', 'send the digest', 'doug');`);
   const id = await create(p, { kind: 'digest', status: 'draft' });
   await p.sql("INSERT INTO holds(about, reason, by) VALUES ('domain:acme.com', 'legal asked us to pause', 'doug')");
@@ -1113,7 +1116,7 @@ test('send sends nothing when the database refuses the claim', async () => {
   assert.match((await send(held)).err, /not sent: locked: someone else is working on this/);
   await p.run(['unlock', 'email:jo@acme.com'], { user: 'sam' });
 
-  await p.sql(`UPDATE trust SET coach_needed = 0, trusted = 1, since_check = 4
+  await p.sql(`UPDATE trust SET coach_needed = 0, trusted = 1, since_check = 4, last_by = 'doug', note = 'trust its replies'
       WHERE desk = 'seo' AND kind = 'email-reply' AND identity = 'clara@seo.test';
     INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('seo', 'email-reply', 'email', 'clara@seo.test', 'let replies go', 'doug');`);
   const draft = await reply({ status: 'draft' });
@@ -1123,7 +1126,7 @@ test('send sends nothing when the database refuses the claim', async () => {
   assert.equal((await action(held)).status, 'approved');
   assert.equal((await action(draft)).status, 'draft');
 
-  await p.sql("UPDATE trust SET since_check = 0 WHERE desk = 'seo' AND kind = 'email-reply'");
+  await p.sql("UPDATE trust SET since_check = 0, last_by = 'doug', note = 'I checked the last one' WHERE desk = 'seo' AND kind = 'email-reply'");
   const auto = await send(draft);
   assert.equal(auto.code, 0, auto.err);
   assert.deepEqual([(await action(draft)).mode, w.sends.length], ['auto', 1]);
@@ -1418,8 +1421,8 @@ test('the listening desk wakes for a brief once, and the briefing desk hears how
 
 test('trusted, allowed briefs go alone, with every fifth shown to a person', async () => {
   const p = await project(desksForBriefs);
-  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coached, clean, trusted, note)
-      VALUES ('gm', 'brief', 'desk', 'gm', 2, 5, 1, 'test');
+  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coached, clean, trusted, last_by, note)
+      VALUES ('gm', 'brief', 'desk', 'gm', 2, 5, 1, 'doug', 'brief them yourself');
     INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('gm', 'brief', 'desk', 'gm', 'brief the desks yourself', 'doug')`);
   for (let i = 0; i < 4; i++) {
     const id = await create(p, briefAction({ status: 'draft', key: `brief:alone:${i}` }));
@@ -1430,4 +1433,148 @@ test('trusted, allowed briefs go alone, with every fifth shown to a person', asy
   const fifth = await create(p, briefAction({ status: 'draft' }));
   assert.match((await p.run(['send', String(fifth)])).err, /spot check due/);
   assert.equal((await p.one('SELECT count(*) AS n FROM tasks')).n, 4);
+});
+
+// ---------- agents: they tighten, people loosen ----------
+
+const desksWithAgent = { ...desksForBriefs, gm: { agent: 'gm' } };
+const gm = { as: 'gm' };
+
+test('a desk names its agent, and the agent works under that name', async () => {
+  const p = await project(desksWithAgent);
+  const again = await p.run(['init']);
+  assert.equal(again.code, 0, again.err);
+  assert.deepEqual(await p.sql('SELECT name, desk, for_whom FROM agents'), [{ name: 'gm', desk: 'gm', for_whom: 'doug' }]);
+  await p.fails("DELETE FROM agents WHERE name = 'gm'", /an agent stays an agent/);
+  await p.fails("UPDATE agents SET name = 'doug2'", /an agent stays an agent/);
+
+  const wrote = await p.sql(`INSERT INTO log(desk, by, kind, summary) VALUES ('gm', :me, 'note', 'working for ' || :person);
+    SELECT by, summary FROM log WHERE kind = 'note'`, gm);
+  assert.deepEqual(wrote, [{ by: 'gm', summary: 'working for doug' }]);
+  const lock = await p.run(['lock', 'brand:acme', 'reading it'], { env: { DESK_AS: 'gm' } });
+  assert.equal(lock.code, 0, lock.err);
+  assert.equal((await p.one("SELECT by FROM locks WHERE key = 'brand:acme'")).by, 'gm');
+
+  // A brief it wrote, approved by the person, sent by the agent.
+  const id = await create(p, briefAction({ by: 'gm' }));
+  await p.sql(approve(id));
+  const sent = await p.run(['send', String(id), '--as', 'gm']);
+  assert.equal(sent.code, 0, sent.err);
+  const a = await p.one(`SELECT a.created_by, a.approved_by, a.sent_by, a.last_by, t.created_by AS task_by
+    FROM actions a JOIN tasks t ON t.source = 'brief:' || a.id WHERE a.id = ${id}`);
+  assert.deepEqual(a, { created_by: 'gm', approved_by: 'doug', sent_by: 'gm', last_by: 'gm', task_by: 'gm' });
+
+  const st = await p.run(['status', '--as', 'gm']);
+  assert.match(st.out, /you are gm, an agent working for doug\./);
+  assert.match(st.out, /Agents: gm works gm for doug\./);
+  assert.match((await p.run(['status', '--as', 'clara'])).err, /clara isn't an agent in this database: put "Agent: clara" in its desk's desk.md/);
+  assert.match((await p.run(['status', '--as', 'doug'])).err, /--as doug is you \(DESK_USER\)/);
+  const named = await p.run(['init'], { user: 'Gm' });
+  assert.match(named.err, /Agent: gm is you \(DESK_USER\): .* give the agent a name of its own/);
+  assert.match((await p.run(['status', '--as', 'gm'], { user: 'GM' })).err, /--as gm is you \(DESK_USER\)/);
+});
+
+test('init checks every Agent: line before it writes, and doctor says what an agent needs', async () => {
+  const p = await project({ a: {}, b: { agent: 'Doug Bot' } }, { init: false });
+  const bad = await p.run(['init']);
+  assert.match(bad.err, /desks\/b\/desk.md: Agent: doug bot is not a name/);
+  assert.match((await p.run(['doctor'])).out, /the database has no desk tables yet/);
+
+  const q = await project(desksWithAgent);
+  assert.match((await q.run(['doctor'])).out, /ok {4}you are doug/);
+  assert.match((await q.run(['doctor'], { user: 'GM' })).out, /fix {3}desks\/gm\/desk.md: Agent: gm is you \(DESK_USER\)/);
+  const md = path.join(q.dir, 'desks/partners/desk.md');
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace(/^# (.+)$/m, '# $1\nAgent: clara'));
+  assert.match((await q.run(['doctor'])).out, /partners: Agent: clara is not in the database yet: run init/);
+  await q.sql("DELETE FROM migrations WHERE name = 'core/001-trust-by.sql'");
+  assert.match((await q.run(['doctor'])).out, /core migration 001-trust-by.sql not applied: run node desks\/desk.mjs init/);
+});
+
+test('an agent can\'t approve, allow, or undo a revoke', async () => {
+  const p = await project(desksWithAgent);
+  const id = await create(p, briefAction({ by: 'gm' }));
+  await p.fails(approve(id, 1, 'gm'), /an agent can't approve/);
+  await p.sql(approve(id), gm);
+
+  const allow = (by) => `INSERT INTO allowed(desk, kind, channel, identity, words, by)
+    VALUES ('gm', 'brief', 'desk', 'gm', 'brief them yourself', '${by}') RETURNING id`;
+  await p.fails(allow('gm'), /only a person allows work to go alone/, gm);
+  const { id: row } = await p.one(allow('doug'), gm);
+  await p.fails(`UPDATE allowed SET scope = 'anything' WHERE id = ${row}`, /stays as they said it/);
+  await p.fails(`UPDATE allowed SET expires_at = '2099-01-01' WHERE id = ${row}`, /stays as they said it/);
+  await p.sql(`UPDATE allowed SET revoked_at = :now, revoked_by = :me WHERE id = ${row}`, gm);
+  await p.fails(`UPDATE allowed SET revoked_at = NULL, revoked_by = NULL WHERE id = ${row}`, /stays as they said it/);
+  assert.equal((await p.one('SELECT count(*) AS n FROM active_allowed')).n, 0);
+});
+
+test('an agent releases only its own holds, and a hold is released, not deleted', async () => {
+  const p = await project(desksWithAgent);
+  const hold = (by) => `INSERT INTO holds(desk, about, reason, by) VALUES ('gm', 'brand:acme', 'they asked for a pause', '${by}') RETURNING id`;
+  const release = (id) => `UPDATE holds SET released_at = :now, released_by = :me, release_reason = 'done' WHERE id = ${id}`;
+  const { id: doug } = await p.one(hold('doug'));
+  const { id: own } = await p.one(hold('gm'), gm);
+  await p.fails(release(doug), /an agent releases only its own holds/, gm);
+  await p.fails(`UPDATE holds SET released_at = :now WHERE id = ${doug}`, /say who released it/);
+  await p.fails(`UPDATE holds SET until = '2020-01-01' WHERE id = ${doug}`, /a hold stays as it was placed/, gm);
+  await p.fails(`DELETE FROM holds WHERE id = ${doug}`, /a hold is released, not deleted/, gm);
+  await p.sql(release(own), gm);
+  await p.sql(release(doug));
+  await p.fails(`UPDATE holds SET released_at = NULL, released_by = NULL WHERE id = ${doug}`, /a hold stays as it was placed/);
+  assert.equal((await p.one('SELECT count(*) AS n FROM active_holds')).n, 0);
+});
+
+test('only a person loosens trust, in their words; anyone can take it away', async () => {
+  const p = await project(desksWithAgent);
+  await create(p, briefAction({ by: 'gm' }));
+  const where = "WHERE desk = 'gm' AND kind = 'brief'";
+  const loosen = ['needed = 2', 'coach_needed = 0', 'check_every = 50', 'trusted = 1', 'clean = 4', 'coached = 2'];
+  for (const set of loosen) {
+    await p.fails(`UPDATE trust SET ${set}, last_by = :me, note = 'I can do this' ${where}`, /only a person loosens trust/, gm);
+  }
+  await p.fails(`UPDATE trust SET needed = 2 ${where}`, /only a person loosens trust/);
+  await p.sql(`UPDATE trust SET coach_needed = 0, last_by = :person, note = 'just write the briefs' ${where}`, gm);
+  await p.fails(`UPDATE trust SET needed = 3, last_by = :person ${where}`, /only a person loosens trust/, gm);
+  await p.sql(`UPDATE trust SET always_human = 1, since_check = 3 ${where}`, gm);
+  await p.fails(`UPDATE trust SET always_human = 0, last_by = :me, note = 'fine' ${where}`, /only a person loosens trust/, gm);
+  await p.fails(`UPDATE trust SET since_check = 0 ${where}`, /only a person loosens trust/, gm);
+  await p.sql(`UPDATE trust SET clean = 0, trusted = 0, since_check = 0, epoch = epoch + 1 ${where}`, gm);
+
+  const t = await trustRow(p, 'brief', 'gm');
+  assert.deepEqual([t.coach_needed, t.needed, t.always_human, t.last_by, t.note], [0, 5, 1, 'doug', 'just write the briefs']);
+  const said = await p.sql("SELECT by, summary, json_extract(details, '$.was.coach_needed') AS was FROM log WHERE kind = 'trust'");
+  assert.deepEqual(said, [{ by: 'doug', summary: 'trust for brief (desk, gm): just write the briefs', was: 2 }]);
+
+  const fresh = (extra = '') => `INSERT INTO trust(desk, kind, channel, identity, coach_needed${extra ? ', last_by, note' : ''})
+    VALUES ('gm', 'report', 'desk', 'gm', 0${extra})`;
+  await p.fails(fresh(), /only a person loosens trust/, gm);
+  await p.fails(fresh(", :me, 'just write it'"), /only a person loosens trust/, gm);
+  await p.sql(fresh(", :person, 'just write the reports'"), gm);
+  assert.equal((await p.one("SELECT count(*) AS n FROM log WHERE kind = 'trust'")).n, 2);
+});
+
+test('an agent gives its own desk tasks, and other desks briefs', async () => {
+  const p = await project(desksWithAgent);
+  const task = (desk, source = null) => `INSERT INTO tasks(desk, what, owner, source, created_by)
+    VALUES ('${desk}', 'look at the numbers', 'doug', ${q(source)}, :me) RETURNING id`;
+  const { id } = await p.one(task('gm'), gm);
+  await p.fails(task('partners'), /an agent gives another desk work with a brief/, gm);
+  await p.fails(task('partners', 'chat'), /an agent gives another desk work with a brief/, gm);
+  await p.sql(task('partners'));
+  await p.fails(`UPDATE tasks SET desk = 'partners' WHERE id = ${id}`, /a task stays on its desk/, gm);
+  assert.deepEqual(await p.sql('SELECT desk, created_by FROM tasks ORDER BY id'),
+    [{ desk: 'gm', created_by: 'gm' }, { desk: 'partners', created_by: 'doug' }]);
+});
+
+test('a database from before migration 001 gets it once and keeps its trust', async () => {
+  const p = await project(desksWithAgent);
+  await p.sql(`DROP TRIGGER trust_loosened; DROP TRIGGER trust_started; DROP TRIGGER trust_said; DROP TRIGGER trust_said_new;
+    ALTER TABLE trust DROP COLUMN last_by;
+    DELETE FROM migrations WHERE name = 'core/001-trust-by.sql';
+    INSERT INTO trust(desk, kind, channel, identity, coach_needed, clean, needed, trusted) VALUES ('gm', 'brief', 'desk', 'gm', 0, 3, 3, 1)`);
+  const first = await p.run(['init']);
+  assert.match(first.out, /Applied: core\/001-trust-by.sql\./);
+  assert.doesNotMatch((await p.run(['init'])).out, /Applied/);
+  const t = await trustRow(p, 'brief', 'gm');
+  assert.deepEqual([t.coach_needed, t.clean, t.needed, t.trusted, t.last_by, t.note], [0, 3, 3, 1, null, null]);
+  await p.fails("UPDATE trust SET needed = 1 WHERE kind = 'brief'", /only a person loosens trust/);
 });

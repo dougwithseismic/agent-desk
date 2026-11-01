@@ -65,4 +65,40 @@ room. Trust and spot checks are what let a person rely on it.
 
 ## Implementation Notes
 
-(Filled in after it ships.)
+Built 1 Nov 2026 in the kit, as core migration 001 and triggers in `core.sql`.
+
+- **Names.** `Agent:` in `desk.md` (lowercased, letters, digits, dashes) goes into `agents`
+  on `init`. `init` checks every line before it writes anything, and refuses a name that is
+  also `DESK_USER` (case-insensitive); `doctor` reports the same faults from the same check. `--as` / `DESK_AS` sets `:me`; `:person` is always
+  `DESK_USER`, so playbooks write approvals and allows under `:person` and the agent's own
+  work under `:me`. An `--as` name not in `agents` is refused, so a typo can't slip past
+  the guards as a "person". `agents` rows can't be deleted or changed.
+- **Guards** (each fails a test when removed; mutations checked): `action_approve`
+  (agent can't approve), `allowed_by_person`, `allowed_kept`, `hold_kept` (fixed once placed,
+  released with a name, an agent's own only), `hold_not_deleted`, `trust_loosened`, `trust_started`, `task_agent_desk`, `task_stays`,
+  `agent_kept`, `agent_fixed`; `trust_said` and `trust_said_new` log a person's words.
+- **Beyond the PRD, for people too.** Without them each guard had a side door, so these
+  apply to everyone: an `allowed` row is fixed once written except for its revoke (widen by
+  revoking and allowing again); a hold is fixed once placed except for its release, and is
+  never deleted; a released hold says who released it; a task can't move desks.
+- **Trust loosening** needs `last_by` naming a person and a fresh `note` (different from the
+  row's last). The PRD planned a `words` column; `trust.note` already held "their words", so
+  migration 001 adds only `last_by`. A person who repeats exactly the words already on the
+  row is refused until they say it differently: the price of an agent not being able to
+  reuse the last person's say-so. Counts jumping by more than one, or `since_check` reset without a clean
+  send, count as loosening. A new trust row looser than the defaults needs the same. An
+  `INSERT OR REPLACE` over an existing row reads as a new row (SQLite fires BEFORE INSERT
+  before conflict resolution), so it's checked against the defaults only: a deliberate
+  workaround, which the README's "guards stop mistakes" covers.
+- **Triggers name columns the migration adds.** SQLite checks trigger bodies when they
+  fire, not when created (checked on 3.50.4), so `core.sql` runs before migration 001
+  without error.
+- **Open.** Not run against a hosted libSQL database: the libsql-server image couldn't be
+  pulled here, and a throwaway Railway database needs Doug's yes. The new SQL is triggers,
+  `ALTER TABLE ADD COLUMN` and literal RAISE messages, all features the hosted tests have
+  covered before (row-value compares were kept out for that reason). `workAs` costs one
+  query per `--as` command, which on a hosted database is one extra round trip; accepted.
+- **Left for later** (simplify review): one append-only "say-so" table that approvals,
+  allows and loosenings point at, instead of the same rule in four triggers; revokes and
+  releases as rows of their own, so `allowed` and `holds` could be fully fixed; trust
+  settings apart from the database's counts. Each is a bigger change than this PRD.

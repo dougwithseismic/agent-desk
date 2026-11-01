@@ -68,8 +68,9 @@ questionnaire.
 
 1. `desks/<name>/desk.md`: the one-page plan in the anatomy format. Include the
    `Headline:`, `Target:` and `Needs:` lines, a `Mail:` line if it talks by email, a
-   `Round:` line if its round runs on a schedule, and their own words for purpose and
-   limits.
+   `Round:` line if its round runs on a schedule, an `Agent:` line if its agent will work
+   without a person in the chat (a name no person uses, such as `gm`), and their own words
+   for purpose and limits.
 2. `desks/<name>/schema.sql`: only the desk's own things, named `<name>_<things>`. Each
    gets a key column, a stage with its values listed, `stage_at`, `source`, `last_by`
    and timestamps, plus the stage-change trigger. Add views for the questions the round
