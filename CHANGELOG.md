@@ -10,10 +10,11 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
   The desks, audits and the rest come up when you ask.
 
 ### Desks find the Stripe key themselves · Improved
-- `DESK_STRIPE_KEY=stripe-cli:<profile>` uses the key a Stripe CLI login already saved, and
-  `env:<NAME>` uses a key the project already keeps in another variable. A desk looks for
-  those before asking you for a restricted key. `doctor` says where the key came from and,
-  for a CLI login, until when it lasts.
+- `DESK_STRIPE_KEY=stripe-cli:<profile>` reads through a Stripe CLI login you already have
+  (with `stripe get`, so the key stays in the CLI), and `env:<NAME>` uses a key the project
+  already keeps in another variable. A desk looks for those before asking you for a
+  restricted key. `doctor` says where the key came from and, for a CLI login, until when it
+  lasts.
 - A live secret key is still refused, wherever it comes from.
 
 ### The watchdog shows what you approved that nobody has sent · Fixed

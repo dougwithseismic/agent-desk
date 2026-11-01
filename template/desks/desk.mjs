@@ -49,15 +49,14 @@
 //                     a project's own Worker already uses (acme-mail:<mailbox>:<id>)
 //   DESK_STRIPE_KEY  a restricted Stripe key with read access (rk_live_ or rk_test_) or a test
 //                    secret key (sk_test_); env:<NAME> for a key already in another variable;
-//                    or stripe-cli:<profile> for the key the Stripe CLI saved at
-//                    `stripe login --project-name <profile>`. A live secret key is refused
-//                    (kit/playbooks/revenue.md)
+//                    or stripe-cli:<profile> to read through the Stripe CLI's login for that
+//                    profile. A live secret key is refused (kit/playbooks/revenue.md)
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const DESKS = path.dirname(fileURLToPath(import.meta.url));
@@ -1609,34 +1608,38 @@ async function readStdin() {
 
 // DESK_STRIPE_KEY is the key itself; env:<NAME> for a key the project already keeps in
 // another variable (the environment, desks/.env or the project's .env); or
-// stripe-cli:<profile> for the live key the Stripe CLI saved at `stripe login --project-name
-// <profile>` (stripe-cli:<profile>:test for its test key). The profile is always named, never
-// the CLI's default, because one machine can be logged in to several businesses.
+// stripe-cli:<profile> to read through the Stripe CLI's login for that profile (`stripe login
+// --project-name <profile>`), in live mode, or test mode with stripe-cli:<profile>:test. The
+// CLI keeps that key in the system keychain; desk.mjs never sees it and only ever runs
+// `stripe get`. The profile is always named, never the CLI's default, because one machine can
+// be logged in to several businesses.
 let stripeFound;
 function stripeKey() {
   if (stripeFound) return stripeFound;
-  const cli = STRIPE_SETTING?.startsWith('stripe-cli:');
+  const viaCli = STRIPE_SETTING?.startsWith('stripe-cli:');
   const [, profile, cliMode = 'live'] = STRIPE_SETTING?.match(/^stripe-cli:([^:\s]+)(?::(live|test))?$/) ?? [];
   const login = profile ? stripeCliLogin(profile) : null;
   const named = STRIPE_SETTING?.match(/^env:([A-Za-z_][A-Za-z0-9_]*)$/)?.[1];
-  const key = cli ? login?.[`${cliMode}_mode_api_key`] : named ? process.env[named] ?? deskEnv[named] ?? projectEnv[named] : STRIPE_SETTING;
+  const key = viaCli ? null : named ? process.env[named] ?? deskEnv[named] ?? projectEnv[named] : STRIPE_SETTING;
   const expires = login?.[`${cliMode}_mode_key_expires_at`];
-  const from = cli ? `the Stripe CLI's ${profile} login${cliMode === 'test' ? ' (test mode)' : ''}` : named ? `${named} (named by DESK_STRIPE_KEY)` : 'DESK_STRIPE_KEY';
-  const again = cli ? `run stripe login --project-name ${profile}` : 'make a new restricted key';
-  const mode = /^(rk|sk)_test_/.test(key ?? '') ? 'test' : 'live';
+  const from = viaCli ? `the Stripe CLI's ${profile} login${cliMode === 'test' ? ' (test mode)' : ''}` : named ? `${named} (named by DESK_STRIPE_KEY)` : 'DESK_STRIPE_KEY';
+  const again = viaCli ? `run stripe login --project-name ${profile}` : 'make a new restricted key';
+  const mode = viaCli ? cliMode : /^(rk|sk)_test_/.test(key ?? '') ? 'test' : 'live';
   let fault = null;
   if (!STRIPE_SETTING) fault = 'DESK_STRIPE_KEY is not set: put a restricted key with read access (rk_live_ or rk_test_) in desks/.env, env:<NAME> for a key already in another variable, or stripe-cli:<profile> to use a Stripe CLI login (kit/playbooks/revenue.md)';
   else if (named && !key) fault = `DESK_STRIPE_KEY says env:${named}, but ${named} isn't set in the environment, desks/.env or the project's .env`;
-  else if (cli && !profile) fault = `DESK_STRIPE_KEY is "${STRIPE_SETTING}": write stripe-cli:<profile>, or stripe-cli:<profile>:test, with the name given to stripe login --project-name`;
-  else if (cli && !key) fault = `DESK_STRIPE_KEY says ${STRIPE_SETTING}, but the Stripe CLI on this machine has no ${profile} login with a ${cliMode} key: ${again}`;
-  else if (expires && expires < new Date().toISOString().slice(0, 10)) fault = `${from} expired on ${expires}: ${again}`;
+  else if (viaCli && !profile) fault = `DESK_STRIPE_KEY is "${STRIPE_SETTING}": write stripe-cli:<profile>, or stripe-cli:<profile>:test, with the name given to stripe login --project-name`;
+  else if (viaCli && !login?.[`${cliMode}_mode_api_key`]) fault = `DESK_STRIPE_KEY says ${STRIPE_SETTING}, but the Stripe CLI on this machine has no ${profile} login in ${cliMode} mode: ${again}`;
+  else if (viaCli && expires && expires < new Date().toISOString().slice(0, 10)) fault = `${from} expired on ${expires}: ${again}`;
+  else if (viaCli) fault = null; // the CLI holds its own key: the checks below are for keys we hold
   else if (key.startsWith('sk_live_')) fault = `${from} is a live secret key, which can change things in Stripe: make a restricted key with read access and use that (kit/playbooks/revenue.md)`;
   else if (!/^(rk_live|rk_test|sk_test)_[A-Za-z0-9]+$/.test(key)) fault = `${from} isn't a key this command takes: it starts rk_live_, rk_test_ or sk_test_`;
   else if (mode === 'live' && STRIPE_URL !== 'https://api.stripe.com') fault = 'a live key goes only to https://api.stripe.com: take DESK_STRIPE_URL out of desks/.env';
-  return (stripeFound = { key, from, again, mode, login, expires, fault });
+  return (stripeFound = { key, from, again, mode, login, expires, profile: viaCli ? profile : null, fault });
 }
 
-// The Stripe CLI keeps its logins in config.toml, one [profile] section each.
+// What the Stripe CLI's config.toml says about a login: its name, account and expiry dates.
+// The key lines there are masked; the CLI keeps the keys themselves in the keychain.
 function stripeCliLogin(profile) {
   const dir = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
   let text;
@@ -1651,12 +1654,15 @@ function stripeCliLogin(profile) {
   }
   return Object.keys(login).length ? login : null;
 }
+
 // Stripe's messages may quote part of a key; never pass one on.
 const unkeyed = (text) => String(text).replace(/\b(sk|rk|pk)_(live|test)_[A-Za-z0-9*]+/g, '<key>');
 
 async function stripeGet(route, query = []) {
-  const { key, from, again, login, fault } = stripeKey();
-  if (fault) fail(fault);
+  const found = stripeKey();
+  if (found.fault) fail(found.fault);
+  if (found.profile) return stripeCliGet(found, route, query);
+  const { key, from, again } = found;
   const url = new URL(`${STRIPE_URL}/v1/${route}`);
   for (const [k, v] of query) url.searchParams.append(k, v);
   let res, text;
@@ -1669,9 +1675,25 @@ async function stripeGet(route, query = []) {
   let json = null;
   try { json = JSON.parse(text); } catch {}
   const why = unkeyed(said(json, text));
-  if (res.status === 401) fail(`Stripe refused ${from} (401: ${why}): it may be ${login ? 'revoked' : 'mistyped or revoked'}; ${again}`);
+  if (res.status === 401) fail(`Stripe refused ${from} (401: ${why}): it may be mistyped or revoked; ${again}`);
   if (res.status === 403) fail(`the key can't read ${route} (403: ${why}): give the restricted key read access to it (kit/playbooks/revenue.md)`);
   if (res.status !== 200 || !json) fail(`Stripe answered ${res.status} for ${route}: ${why}`);
+  return json;
+}
+
+// The same read through `stripe get`, which answers Stripe's errors as JSON and its own
+// (no login, an expired key) on stderr.
+async function stripeCliGet({ profile, mode, from, again }, route, query) {
+  const args = ['get', `/v1/${route}`, '--project-name', profile, ...(mode === 'live' ? ['--live'] : []), ...query.flatMap(([k, v]) => ['-d', `${k}=${v}`])];
+  const { out, err, code } = await new Promise((resolve) => {
+    execFile('stripe', args, { timeout: 30000, maxBuffer: 256 * 1024 * 1024 }, (e, stdout, stderr) =>
+      resolve({ out: stdout, err: stderr || e?.message, code: e?.code }));
+  });
+  if (code === 'ENOENT') fail(`DESK_STRIPE_KEY says ${STRIPE_SETTING}, but the Stripe CLI isn't installed here: install it, or give a key (kit/playbooks/revenue.md)`);
+  let json = null;
+  try { json = JSON.parse(out); } catch {}
+  if (json?.error) fail(`Stripe answered for ${route}, through ${from}: ${unkeyed(said(json, out))}`);
+  if (code !== undefined || !json) fail(`${from} couldn't read ${route}: ${unkeyed(line1(err || out).slice(0, 300))}; ${again}`);
   return json;
 }
 

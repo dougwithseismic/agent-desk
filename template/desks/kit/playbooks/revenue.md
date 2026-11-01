@@ -14,9 +14,10 @@ The `stripe` command takes its key from `DESK_STRIPE_KEY`, in the environment or
    `DESK_STRIPE_KEY=env:STRIPE_READ_KEY` reads that variable from the environment,
    `desks/.env` or the project's `.env`, so the key isn't copied anywhere. Look for the
    variable's name, never print its value.
-2. **The Stripe CLI.** If someone on this machine ran `stripe login`, the CLI saved a key
-   for that account. `DESK_STRIPE_KEY=stripe-cli:<profile>` uses its live key, and
-   `stripe-cli:<profile>:test` its test key. The profile is the name given at
+2. **The Stripe CLI.** If someone on this machine ran `stripe login`, the CLI holds a key for
+   that account in the system keychain. `DESK_STRIPE_KEY=stripe-cli:<profile>` reads through
+   it in live mode, and `stripe-cli:<profile>:test` in test mode: the command runs
+   `stripe get` for each read and never sees the key. The profile is the name given at
    `stripe login --project-name <profile>`. See which logins there are, without the keys:
 
    ```bash
@@ -25,9 +26,10 @@ The `stripe` command takes its key from `DESK_STRIPE_KEY`, in the environment or
 
    Pick the profile whose `display_name` is this business. One machine is often logged in to
    several, so never take the default one because it's there. You may write the
-   `stripe-cli:` line into `desks/.env` yourself: it names a login, it isn't a key. A CLI key
+   `stripe-cli:` line into `desks/.env` yourself: it names a login, it isn't a key. A CLI login
    lasts 90 days. `doctor` says until when, and when it runs out the person runs
-   `stripe login --project-name <profile>` again.
+   `stripe login --project-name <profile>` again. A CLI login can usually change things in
+   Stripe too, so the command only ever runs `stripe get` with it.
 3. **A restricted key from the Dashboard.** Ask the person. On the API keys page they create
    a restricted key, give it **Read** on these and nothing on the rest:
 
@@ -42,9 +44,9 @@ The `stripe` command takes its key from `DESK_STRIPE_KEY`, in the environment or
    It goes in `desks/.env` as `DESK_STRIPE_KEY=rk_live_...`, written by the person, never
    pasted into the chat.
 
-Whichever it is, reads go through `desk.mjs stripe`: never `stripe post`, `stripe delete` or
-anything else in the CLI that changes things, and never a key in a command line, a log or the
-chat. A test key (`rk_test_` or `sk_test_`) reads test mode only, which is right for trying a
+Whichever it is, reads go through `desk.mjs stripe`. Never run `stripe post`, `stripe delete`
+or anything else in the CLI that changes things, and never put a key in a command line, a log
+or the chat. A test key (`rk_test_` or `sk_test_`) reads test mode only, which is right for trying a
 desk out and wrong for its headline. The command refuses a live secret key (`sk_live_`)
 before it calls Stripe, wherever it came from, because that key can change things. It sends
 a live key nowhere but Stripe.

@@ -1950,45 +1950,60 @@ test('DESK_STRIPE_KEY can name another variable that holds the key, and the same
   for (const r of [doc, read, secret, unset]) assert.ok(!/desk123|appsecret321/.test(r.out + r.err), r.out + r.err);
 });
 
-test('DESK_STRIPE_KEY can name a Stripe CLI login by its profile, never the default one', async () => {
-  const s = await fakeStripe(stripeData());
+test('DESK_STRIPE_KEY can read through a Stripe CLI login, by profile, with stripe get only', async () => {
   const p = await project({ gm: { needs: 'DESK_STRIPE_KEY' } });
-  const xdg = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-stripe-'));
-  fs.mkdirSync(path.join(xdg, 'stripe'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-stripe-'));
+  const bin = path.join(home, 'bin');
+  fs.mkdirSync(bin);
+  fs.mkdirSync(path.join(home, 'stripe'));
+  const calls = path.join(home, 'calls.jsonl');
+  // A stand-in for the Stripe CLI: logs its arguments and answers as `stripe get` does.
+  fs.writeFileSync(path.join(bin, 'stripe'), `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
+if (process.env.FAKE_STRIPE_STDERR) { process.stderr.write(process.env.FAKE_STRIPE_STDERR); process.exit(1); }
+if (args[1] === '/v1/nope') { console.log(JSON.stringify({ error: { message: 'Unrecognized request URL (GET: /v1/nope).', type: 'invalid_request_error' } })); process.exit(0); }
+console.log(JSON.stringify({ object: 'list', has_more: false, data: [{ id: 'ch_1', object: 'charge' }] }));
+`, { mode: 0o755 });
   const later = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-  const login = (acmeTestExpires = later) => fs.writeFileSync(path.join(xdg, 'stripe', 'config.toml'), [
-    "color = ''", '[default]', "display_name = 'Another business'", "test_mode_api_key = 'sk_test_otherbusiness9'", `test_mode_key_expires_at = '${later}'`,
-    '[acme]', "account_id = 'acct_acme'", "display_name = 'Acme'", "live_mode_api_key = 'rk_live_acmecli777'", `live_mode_key_expires_at = '${later}'`,
-    `test_mode_api_key = '${s.key}'`, `test_mode_key_expires_at = '${acmeTestExpires}'`, ''].join('\n'));
+  const login = (acmeTestExpires = later) => fs.writeFileSync(path.join(home, 'stripe', 'config.toml'), [
+    "color = ''", '[default]', "display_name = 'Another business'", "test_mode_api_key = 'sk_test_***9'", `test_mode_key_expires_at = '${later}'`,
+    '[acme]', "account_id = 'acct_acme'", "display_name = 'Acme'", "live_mode_api_key = 'rk_live_***7'", `live_mode_key_expires_at = '${later}'`,
+    "test_mode_api_key = 'rk_test_***3'", `test_mode_key_expires_at = '${acmeTestExpires}'`, ''].join('\n'));
   login();
-  const cli = (value) => ({ env: { DESK_STRIPE_URL: s.env.DESK_STRIPE_URL, DESK_STRIPE_KEY: value, XDG_CONFIG_HOME: xdg } });
+  const cli = (value, env = {}) => ({ env: { DESK_STRIPE_KEY: value, XDG_CONFIG_HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ...env } });
+  const called = () => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 
   const doc = await p.run(['doctor'], cli('stripe-cli:acme:test'));
   assert.match(doc.out, new RegExp(`ok +Stripe reads in test mode with the Stripe CLI's acme login \\(test mode\\) \\(Acme, until ${later}\\)`));
   assert.doesNotMatch(doc.out, /gm needs/);
-  const read = await p.run(['stripe', 'charges', 'limit=1'], cli('stripe-cli:acme:test'));
+  assert.deepEqual(called().at(-1), ['get', '/v1/balance_transactions', '--project-name', 'acme', '-d', 'limit=1']);
+  const read = await p.run(['stripe', 'charges', 'limit=1'], cli('stripe-cli:acme'));
   assert.equal(read.code, 0, read.err);
+  assert.equal(JSON.parse(read.out).data[0].id, 'ch_1');
+  assert.deepEqual(called().at(-1), ['get', '/v1/charges', '--project-name', 'acme', '--live', '-d', 'limit=1']);
+  assert.ok(called().every((a) => a[0] === 'get' && a[3] === 'acme'), 'only ever stripe get, and only for the named login');
 
-  // Its live key is read too, and still goes nowhere but Stripe.
-  const before = s.requests.length;
-  const live = await p.run(['stripe', 'charges'], cli('stripe-cli:acme'));
-  assert.match(live.err, /a live key goes only to https:\/\/api.stripe.com/);
+  const nope = await p.run(['stripe', 'nope'], cli('stripe-cli:acme'));
+  assert.match(nope.err, /Stripe answered for nope, through the Stripe CLI's acme login: Unrecognized request URL/);
+  const stale = await p.run(['stripe', 'charges'], cli('stripe-cli:acme', { FAKE_STRIPE_STDERR: 'your live mode API key rk_live_abc123 needs to be re-configured' }));
+  assert.match(stale.err, /the Stripe CLI's acme login couldn't read charges: your live mode API key <key> needs to be re-configured; run stripe login --project-name acme/);
+
+  const before = called().length;
   const missing = await p.run(['doctor'], cli('stripe-cli:nobody'));
-  assert.match(missing.out, /fix +DESK_STRIPE_KEY says stripe-cli:nobody, but the Stripe CLI on this machine has no nobody login with a live key: run stripe login --project-name nobody/);
+  assert.match(missing.out, /fix +DESK_STRIPE_KEY says stripe-cli:nobody, but the Stripe CLI on this machine has no nobody login in live mode: run stripe login --project-name nobody/);
   const bare = await p.run(['stripe', 'charges'], cli('stripe-cli:'));
   assert.match(bare.err, /write stripe-cli:<profile>/);
   login('2020-01-01');
   const expired = await p.run(['stripe', 'charges'], cli('stripe-cli:acme:test'));
   assert.match(expired.err, /the Stripe CLI's acme login \(test mode\) expired on 2020-01-01: run stripe login --project-name acme/);
-  assert.equal(s.requests.length, before, 'no call to Stripe without a usable key');
-
+  assert.equal(called().length, before, 'no call to the CLI without a usable login');
   login();
-  s.key = 'rk_test_rotated000';
-  const revoked = await p.run(['stripe', 'charges'], cli('stripe-cli:acme:test'));
-  assert.match(revoked.err, /Stripe refused the Stripe CLI's acme login \(test mode\) \(401: .*\): it may be revoked; run stripe login --project-name acme/);
-  for (const r of [doc, read, live, missing, bare, expired, revoked]) {
-    assert.ok(!/acmecli777|otherbusiness9|desk123/.test(r.out + r.err), r.out + r.err);
-  }
+  const nowhere = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-nopath-'));
+  const absent = await p.run(['stripe', 'charges'], cli('stripe-cli:acme', { PATH: nowhere }));
+  assert.match(absent.err, /the Stripe CLI isn't installed here/);
+  for (const r of [doc, read, nope, stale, missing, bare, expired, absent]) assert.ok(!/abc123/.test(r.out + r.err), r.out + r.err);
 });
 
 // ---------- the GM: it briefs, the desks do ----------
