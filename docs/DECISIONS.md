@@ -5,10 +5,13 @@ standing rules for changing the kit; this file has what was decided on top of th
 
 ## How autopilot runs here
 
-- **Status**: Running.
+- **Status**: Running. Wave 3 since 1 Nov (Doug: "Please go into autopilot and design this").
 - **Ship rights**: none recorded. Each round is built in its own worktree, then merged into
   `main` locally. Nothing is pushed to `origin` until Doug says so (his global rule, and
   `AGENTS.md`).
+- **Second repo**: wave 3's starter rows (PRDs 18–20) are built in
+  the public `react-saas-starter` repo, under the same rules: local merges, no push
+  without his yes. Its PRDs move into that repo when its lane starts.
 - **Base branch**: `main`. Claims are commits on local `main` (`docs: claim PRD <nn>`).
 - **Deploy targets**: none. The kit isn't deployed anywhere. A project's mail Worker is
   deployed by that project, and only with Doug's yes.
@@ -17,7 +20,8 @@ standing rules for changing the kit; this file has what was decided on top of th
   for the end-to-end check (mail in, `watch` wakes, a reply goes out).
 - **Test account**: none.
 - **Third-party services changed unattended**: none. No Cloudflare changes and no client
-  project changes without asking.
+  project changes without asking. Stripe: test mode only, and only in a throwaway project or
+  the starter. No scheduled tasks are created without Doug's yes.
 - **Loop**: the build is bounded and has no deploy waits, so rounds are chained in the
   session rather than through `/loop`.
 - **Market scan and launch bar**: not used. This is an internal kit, not a product for sale.
@@ -70,6 +74,54 @@ possible infrastructure".
   asks.
 - **Desk types.** The kit ships desk types, each a template of plan, playbooks, tables,
   tools and triggers. Outreach and SEO come first.
+
+## A GM runs the business (2026-11-01)
+
+Doug, 1 Nov: the desks work, in that a task gets done and a desk can reach out, but nothing
+minds the commercial side, so a person still prompts every step. He asked for an agent that runs
+the business and delegates to the desks: it oversees the other agents, works towards commercial
+goals, makes decisions, and has trust and spot-check mechanisms. Later the same day: the kit
+should have the tools, skills and resources to make revenue with Stripe; a business can launch
+new initiatives such as an affiliate program, with desks emailing potential affiliates in the
+meantime; and one central skill should delegate and start Claude Code sessions without a yes box
+for each one. He wants the same in the React SaaS starter.
+
+- **The GM is a desk.** One per business, in the same database as the desks it runs, so it
+  reads their boards, measures, trust and log directly. Its headline is money (revenue or MRR,
+  read from Stripe) against a target the person sets. The kit calls it `gm`; a business can
+  give it a name, as it does its other desks.
+- **Delegating is a channel.** The GM briefs a desk with an action on channel `desk`, target
+  `desk:<name>`. Sending it creates a task on that desk, which wakes the desk's listening chat.
+  Briefs earn trust the way emails do: shown at first, then alone with every fifth in full. A
+  brief never approves anything: the receiving desk's own sends still need their own trust.
+- **Agents tighten, people loosen.** An agent working under its own name may pause work (a
+  hold), revoke what's allowed and take trust away. It can't approve, grant `allowed`, release a
+  hold someone else placed, or loosen trust settings. The database refuses those writes. Like
+  every guard here, this stops mistakes, not an agent that writes a person's name on purpose.
+- **Spot checks go both ways.** The person sees every fifth GM decision of a trusted kind in
+  full. The GM audits a sample of what each desk sent on its own, and a failed audit takes that
+  kind's trust away. Nobody audits their own work.
+- **The person's part is one brief a day.** Money against the target, a line per desk, what
+  went out alone, what's stuck, and numbered yes/no questions. Their answers are recorded as
+  decisions, in their words.
+- **Money stays with a person.** Prices, refunds, payouts, live-mode keys, contracts, spending
+  and anything published in the person's name are always-human kinds. Stripe is read through a
+  restricted read-only key; a Stripe write is an action a person makes.
+- **Starting sessions.** In the Claude Code app a session can't start another on its own:
+  `start_session` shows a card unless the person asked in words, and it's refused on turns that
+  another session or an automated event started. A scheduled task saved in auto or bypass mode
+  does run on its own, and `run_scheduled_task` starts one now, as a new visible session. So
+  each desk gets an on-demand task that listens as that desk, created once with the person's
+  yes, and the GM runs it when the desk has work and nobody is listening. The GM's own day
+  starts from a scheduled task too. Desks still work in visible chats in the app, as decided on
+  30 Oct; elsewhere (Codex) the GM asks the person to open the chat.
+- **Bypass mode moves the guard into the database.** With no tool prompts, the triggers and the
+  restricted keys are what stop a mistake, so everything that leaves the machine goes through
+  an action: email, site changes, Stripe, payouts.
+- **Order.** Wave 3 goes before the rest of wave 2 (PRDs 07–10), because the desks need to move
+  the business, not just run.
+- **The starter** gets Stripe billing, an affiliate program built on it, and the kit with a GM
+  and an affiliates desk reading the app's own data.
 
 ## How listening works
 
