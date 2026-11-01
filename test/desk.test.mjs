@@ -195,6 +195,12 @@ test('long text goes in from a file exactly, with no escaping', async () => {
   assert.equal((await p.one(`SELECT body FROM actions WHERE id = ${id}`)).body, text);
 });
 
+test('a whole number goes in as an integer, on a local database as on a hosted one', async () => {
+  const p = await project();
+  const r = await p.one("SELECT 'brief:' || :id AS ref, typeof(:id) AS type", { args: { id: 7 } });
+  assert.deepEqual([r.ref, r.type], ['brief:7', 'integer']);
+});
+
 test('using :me without DESK_USER says how to fix it', async () => {
   const p = await project();
   const r = await p.run(['sql', "SELECT :me"], { user: null });
@@ -1259,4 +1265,163 @@ test('mail reads the desk\'s own mail from the Worker, as data', async () => {
 
   w.redirectTo = 'https://mail.example.test/v1/status';
   assert.match((await mail('status')).err, /redirects to https:\/\/mail.example.test\/v1\/status: set DESK_MAIL_URL to that address/);
+});
+
+// ---------- briefs: one desk hands work to another ----------
+
+const briefPayload = (o = {}) => JSON.stringify({ done_when: 'Acme has our email, or we know why not', ...o });
+const brief = (o = {}) => newAction({
+  desk: 'gm', kind: 'brief', channel: 'desk', identity: 'gm', about: 'brand:acme', target: 'desk:partners',
+  title: 'Ask Acme to list us', body: 'Acme lists tools like ours on its resources page. Write to them.',
+  payload: briefPayload({ due: '2026-11-08', about: 'brand:acme' }), ...o,
+});
+const desksForBriefs = { gm: {}, partners: {} };
+
+test('an approved brief becomes one task on the other desk, and the brief is verified', async () => {
+  const p = await project(desksForBriefs);
+  const { id } = await p.one(brief());
+  await p.sql(approve(id));
+  const r = await p.run(['send', String(id), '--json']);
+  assert.equal(r.code, 0, r.err);
+  const out = JSON.parse(r.out);
+  assert.deepEqual([out.status, out.desk], ['verified', 'partners']);
+  const task = await p.one(`SELECT * FROM tasks WHERE source = 'brief:${id}'`);
+  assert.deepEqual(
+    [task.id, task.desk, task.what, task.owner, task.about, task.due, task.done_when, task.status, task.created_by],
+    [out.task, 'partners', 'Ask Acme to list us', 'agent', 'brand:acme', '2026-11-08', 'Acme has our email, or we know why not', 'open', 'doug'],
+  );
+  const a = await p.one(`SELECT status, provider_ref, mode, sent_by, trust_counted_at FROM actions WHERE id = ${id}`);
+  assert.deepEqual([a.status, a.provider_ref, a.mode, a.sent_by], ['verified', `task:${task.id}`, 'human', 'doug']);
+  assert.ok(a.trust_counted_at, 'delivery counts towards trust');
+  assert.equal((await p.one("SELECT coached FROM trust WHERE desk = 'gm' AND kind = 'brief'")).coached, 1);
+  const st = await p.run(['status']);
+  assert.match(st.out, /partners: .*1 brief open, oldest 0 d/);
+});
+
+test('a brief is delivered once, however many times or ways it is sent', async () => {
+  const p = await project(desksForBriefs);
+  const { id } = await p.one(brief());
+  await p.sql(approve(id));
+  const racers = await Promise.all(['w1', 'w2', 'w3', 'w4', 'w5'].map((u) => p.run(['send', String(id)], { user: u })));
+  assert.equal(racers.filter((r) => r.code === 0).length, 1, racers.map((r) => r.out + r.err).join('\n'));
+  assert.equal((await p.one(`SELECT count(*) AS n FROM tasks WHERE source = 'brief:${id}'`)).n, 1);
+  const again = await p.run(['send', String(id)]);
+  assert.equal(again.code, 1);
+  assert.match(again.err, /was delivered already \(task:\d+\)/);
+
+  // A task can't claim to come from a brief, before it's delivered or after.
+  const { id: other } = await p.one(brief());
+  await p.fails(`INSERT INTO tasks(desk, what, source, created_by) VALUES ('partners', 'sneak', 'brief:${other}', 'doug')`,
+    /a task from a brief is made by sending the brief/);
+  await p.fails(claim(id), /only an approved action/);
+
+  // Nor can a brief be recorded as sent without a task of its own.
+  const { id: task } = await p.one(`SELECT id FROM tasks WHERE source = 'brief:${id}'`);
+  await p.sql(approve(other) + claim(other));
+  for (const ref of ['NULL', `'task:${task}'`]) {
+    await p.fails(`UPDATE actions SET status = 'sent', provider_ref = ${ref} WHERE id = ${other}`, /a brief is sent by delivering it as a task/);
+  }
+});
+
+test('a brief that is waiting, untrusted or held stays where it is and makes no task', async () => {
+  const p = await project(desksForBriefs);
+  const { id: waiting } = await p.one(brief());
+  const w = await p.run(['send', String(waiting)]);
+  assert.equal(w.code, 1);
+  assert.match(w.err, /is waiting for a person/);
+
+  const { id: draft } = await p.one(brief({ status: 'draft' }));
+  const d = await p.run(['send', String(draft)]);
+  assert.equal(d.code, 1);
+  assert.match(d.err, /coached examples always go to a person|not trusted/);
+
+  const { id: held } = await p.one(brief());
+  await p.sql(approve(held));
+  await p.sql(`INSERT INTO holds(desk, about, reason, by) VALUES (NULL, 'desk:partners', 'partners is busy with a launch', 'doug')`);
+  const h = await p.run(['send', String(held)]);
+  assert.equal(h.code, 1);
+  assert.match(h.err, /held/);
+  assert.equal((await p.one(`SELECT status FROM actions WHERE id = ${held}`)).status, 'approved');
+  assert.equal((await p.one('SELECT count(*) AS n FROM tasks')).n, 0);
+
+  // A hold for the briefing desk only stops its briefs too.
+  await p.sql("UPDATE holds SET released_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), released_by = 'doug', release_reason = 'launch done'");
+  await p.sql(`INSERT INTO holds(desk, about, topic, reason, by) VALUES ('gm', 'desk:partners', 'brief', 'no more briefs this week', 'doug')`);
+  assert.match((await p.run(['send', String(held)])).err, /held/);
+});
+
+test('a brief names another desk, says when it is done, and goes to an agent or a builder', async () => {
+  const p = await project(desksForBriefs);
+  await p.fails(brief({ target: 'desk:nobody' }), /a brief goes to another desk/);
+  await p.fails(brief({ target: 'desk:gm' }), /a brief goes to another desk/);
+  await p.fails(brief({ target: 'email:jo@acme.com' }), /a brief goes to another desk/);
+  await p.fails(brief({ payload: '{}' }), /set payload.done_when/);
+  await p.fails(brief({ payload: briefPayload({ done_when: '  ' }) }), /set payload.done_when/);
+  await p.fails(brief({ payload: briefPayload({ owner: 'doug' }) }), /agent or a builder/);
+  await p.fails(brief({ payload: briefPayload({ due: 'next week' }) }), /payload.due is a date/);
+
+  // Edited while it waited: checked again as it goes.
+  const { id } = await p.one(brief());
+  await p.sql(`UPDATE actions SET payload = '{"done_when": ""}', last_by = 'doug' WHERE id = ${id}`);
+  await p.sql(approve(id, 2));
+  assert.match((await p.run(['send', String(id)])).err, /set payload.done_when/);
+  const { id: late } = await p.one(brief());
+  await p.sql(`UPDATE actions SET payload = json_set(payload, '$.due', 'next friday'), last_by = 'doug' WHERE id = ${late}`);
+  await p.sql(approve(late, 2));
+  assert.match((await p.run(['send', String(late)])).err, /payload.due is a date/);
+  assert.equal((await p.one('SELECT count(*) AS n FROM tasks')).n, 0);
+  const { id: builder } = await p.one(brief({ payload: briefPayload({ owner: 'builder' }) }));
+  await p.sql(approve(builder));
+  assert.equal((await p.run(['send', String(builder)])).code, 0);
+  assert.equal((await p.one(`SELECT owner FROM tasks WHERE source = 'brief:${builder}'`)).owner, 'builder');
+});
+
+test('a brief that fails part-way is not delivered and makes no task', async () => {
+  const p = await project({ gm: {}, partners: { schema: `DROP TRIGGER IF EXISTS test_no_tasks;
+    CREATE TRIGGER test_no_tasks BEFORE INSERT ON tasks WHEN NEW.desk = 'partners'
+    BEGIN SELECT RAISE(ABORT, 'test: partners takes no tasks'); END;` } });
+  const { id } = await p.one(brief());
+  await p.sql(approve(id));
+  const r = await p.run(['send', String(id)]);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /partners takes no tasks.*Nothing was saved/);
+  assert.equal((await p.one(`SELECT status FROM actions WHERE id = ${id}`)).status, 'approved');
+  assert.equal((await p.one('SELECT count(*) AS n FROM tasks')).n, 0);
+});
+
+test('the listening desk wakes for a brief once, and the briefing desk hears how it went', async () => {
+  const p = await project(desksForBriefs);
+  assert.equal((await p.run(['watch', 'partners', ...quick])).out, 'nothing new for partners in 0s\n');
+  const listening = p.run(['watch', 'partners', '--every', '0.05', '--max', '10s']);
+  await new Promise((r) => setTimeout(r, 300));
+  const { id } = await p.one(brief({ payload: briefPayload() }));
+  await p.sql(approve(id));
+  assert.equal((await p.run(['send', String(id)])).code, 0);
+  const { id: task } = await p.one(`SELECT id FROM tasks WHERE source = 'brief:${id}'`);
+  assert.equal((await listening).out, `task ${task} due now\n`);
+  assert.equal((await p.run(['watch', 'partners', ...quick])).out, 'nothing new for partners in 0s\n', 'once');
+
+  await p.sql(`UPDATE tasks SET status = 'done', result = 'emailed Jo at Acme (#88)', proof = 'action:88',
+    done_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ${task}`);
+  const heard = await p.one(`SELECT desk, by, about, action_id, summary FROM log WHERE action_id = ${id} ORDER BY id DESC LIMIT 1`);
+  assert.deepEqual([heard.desk, heard.by, heard.about], ['gm', 'desk:partners', `task:${task}`]);
+  assert.match(heard.summary, new RegExp(`brief #${id} to partners: task ${task} done: emailed Jo at Acme`));
+  const b = await p.one(`SELECT * FROM briefs WHERE action_id = ${id}`);
+  assert.deepEqual([b.from_desk, b.to_desk, b.task_status, b.proof], ['gm', 'partners', 'done', 'action:88']);
+});
+
+test('trusted, allowed briefs go alone, with every fifth shown to a person', async () => {
+  const p = await project(desksForBriefs);
+  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coached, clean, trusted, note)
+      VALUES ('gm', 'brief', 'desk', 'gm', 2, 5, 1, 'test');
+    INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('gm', 'brief', 'desk', 'gm', 'brief the desks yourself', 'doug')`);
+  for (let i = 0; i < 4; i++) {
+    const { id } = await p.one(brief({ status: 'draft', key: `brief:alone:${i}` }));
+    const r = await p.run(['send', String(id), '--json']);
+    assert.equal(r.code, 0, r.err);
+    assert.equal((await p.one(`SELECT mode FROM actions WHERE id = ${id}`)).mode, 'auto');
+  }
+  const { id: fifth } = await p.one(brief({ status: 'draft' }));
+  assert.match((await p.run(['send', String(fifth)])).err, /spot check due/);
+  assert.equal((await p.one('SELECT count(*) AS n FROM tasks')).n, 4);
 });

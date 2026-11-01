@@ -211,12 +211,15 @@ async function openLocal(db) {
           try {
             const st = conn.prepare(s.sql);
             const cols = st.columns().map((c) => c.name);
+            // node:sqlite binds every number as REAL, so 'brief:' || :id would read brief:1.0.
+            // Whole numbers go in as integers, as they do on a hosted database.
+            const args = Object.fromEntries(Object.entries(s.args).map(([k, v]) => [k, Number.isSafeInteger(v) ? BigInt(v) : v]));
             if (cols.length) {
               st.setReturnArrays(true);
-              const rows = st.all(s.args).map((r) => r.map((v) => (v instanceof Uint8Array ? Buffer.from(v) : v)));
+              const rows = st.all(args).map((r) => r.map((v) => (v instanceof Uint8Array ? Buffer.from(v) : v)));
               results.push({ cols, rows, changes: rows.length });
             } else {
-              const r = st.run(s.args);
+              const r = st.run(args);
               results.push({ cols, rows: [], changes: Number(r.changes) });
             }
           } catch (e) {
@@ -565,15 +568,18 @@ async function status(flags, deskName) {
       WHERE (desk IS NULL OR ${f()}) AND id NOT IN (SELECT replaces FROM lessons WHERE replaces IS NOT NULL)
       ORDER BY id DESC LIMIT 10;
     SELECT desk, by, since, looked_at FROM listening WHERE ${f()};
+    SELECT to_desk AS desk, count(*) AS open, max(days) AS oldest_days FROM briefs
+      WHERE task_status = 'open' AND (:d IS NULL OR to_desk = :d) GROUP BY to_desk;
   `, v);
   if (flags.json) {
-    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening'];
+    const names = ['board', 'waiting', 'due', 'in_flight', 'locks', 'holds', 'trust', 'lessons', 'listening', 'briefs'];
     console.log(JSON.stringify(Object.fromEntries(results.map((r, i) => [names[i], asObjects(r.cols, r.rows)])), null, 2));
     db.close();
     return;
   }
-  const [board, waiting, due, flight, locks, holds, trust, lessons, listening] = results;
+  const [board, waiting, due, flight, locks, holds, trust, lessons, listening, briefs] = results;
   const heard = new Map(listening.rows.map(([d, by, , looked]) => [d, { by, looked }]));
+  const briefed = new Map(briefs.rows.map(([d, n, days]) => [d, { n, days }]));
   console.log(`${HOSTED ? 'Hosted' : 'Local'} database ${db.where}, you are ${USER ?? '(DESK_USER not set)'}.`);
   if (!board.rows.length) console.log(desk ? `No desk called ${desk}: run init after adding desks/${desk}/desk.md.` : 'No desks yet.');
   for (const r of board.rows) {
@@ -581,6 +587,8 @@ async function status(flags, deskName) {
     const bits = [`${w} waiting`, `${d} due`, `${fl} in flight`];
     if (u) bits.push(`${u} UNCERTAIN`);
     if (l) bits.push(`${l} locked`);
+    const br = briefed.get(name);
+    if (br) bits.push(`${br.n} brief${br.n === 1 ? '' : 's'} open, oldest ${br.days} d`);
     const ear = heard.get(name);
     if (ear) bits.push(listeningNow(ear));
     let line = `${name}: ${bits.join(' · ')}`;
@@ -1148,7 +1156,6 @@ function sendOutcome(answer) {
 async function send(flags, idText) {
   const id = Number(idText);
   if (!Number.isSafeInteger(id) || id < 1) fail('usage: desk.mjs send <action id>');
-  mailSettings();
   if (!USER) fail('set DESK_USER in desks/.env first, so the send says who sent it');
   const action = async () => {
     const [found] = await query('SELECT desk, key, channel, identity, target, title, body, payload, status, sent_by, provider_ref FROM actions WHERE id = :id', { id });
@@ -1157,6 +1164,8 @@ async function send(flags, idText) {
   const a = await action();
   if (!a) fail(`no action ${id}`);
   const stop = (why) => fail(`not sent: action ${id} ${why}`);
+  if (a.channel === 'desk') return sendBrief(flags, id, a, stop);
+  mailSettings();
   const look = `look with node desks/desk.mjs mail sent --key '${a.key}'`;
 
   // What the database will be asked, and what it can't be asked at all.
@@ -1236,6 +1245,49 @@ async function send(flags, idText) {
     console.error(`Might have gone: ${outcome.result}. Recorded #${id} as uncertain, so it is never sent again: ${look}, then settle it as sent or failed.`);
   }
   return outcome.status === 'sent' ? 0 : 1;
+}
+
+// Delivers a brief (channel desk) as a task on the desk it names. The claim, the task and the
+// record are one write, so a brief is delivered once or not at all. Nothing leaves the
+// database, so delivery is its own verification.
+async function sendBrief(flags, id, a, stop) {
+  const mode = { approved: 'human', draft: 'auto' }[a.status];
+  if (!mode) {
+    stop({
+      waiting: 'is waiting for a person: show it and ask',
+      sent: `was delivered already (${a.provider_ref})`,
+      verified: `was delivered already (${a.provider_ref})`,
+    }[a.status] ?? `is ${a.status}`);
+  }
+  let results;
+  try {
+    results = await query(`
+      UPDATE actions SET status = 'sending', mode = :mode, sent_by = :me, last_by = :me WHERE id = :id AND status = :was;
+      INSERT INTO tasks(desk, what, owner, about, due, done_when, source, created_by)
+        SELECT substr(target, 6), title, coalesce(json_extract(payload, '$.owner'), 'agent'),
+          json_extract(payload, '$.about'), json_extract(payload, '$.due'),
+          json_extract(payload, '$.done_when'), 'brief:' || id, :me
+        FROM actions WHERE id = :id AND status = 'sending' AND sent_by = :me;
+      UPDATE actions SET status = 'sent', last_by = :me,
+          provider_ref = (SELECT 'task:' || t.id FROM tasks t WHERE t.source = 'brief:' || actions.id)
+        WHERE id = :id AND status = 'sending' AND sent_by = :me;
+      UPDATE actions SET status = 'verified', last_by = :me, result = 'delivered as ' || provider_ref
+        WHERE id = :id AND status = 'sent' AND sent_by = :me;
+      SELECT status, provider_ref FROM actions WHERE id = :id;`, { id, mode, was: a.status });
+  } catch (e) {
+    if (!(e instanceof DeskError)) throw e;
+    fail(`not sent: ${e.message}`);
+  }
+  const [status, ref] = results.at(-1).rows[0] ?? [];
+  if (!results[0].changes) {
+    stop(status === 'verified' ? `was delivered already (${ref})` : 'changed while it was being sent: read it again');
+  }
+  if (status !== 'verified') fail(`brief #${id} was claimed but not recorded as delivered (it is ${status}): read it and the tasks on the ${a.target.slice(5)} desk`);
+  const task = Number(ref.slice(5));
+  const to = a.target.slice(5);
+  if (flags.json) console.log(JSON.stringify({ action: id, status, provider_ref: ref, task, desk: to, key: a.key }));
+  else console.log(`Delivered #${id} to the ${to} desk as task ${task}${mode === 'auto' ? ', on its own' : ''}. A chat listening to ${to} wakes for it, and the result comes back in the log.`);
+  return 0;
 }
 
 function csv(cols, rows) {

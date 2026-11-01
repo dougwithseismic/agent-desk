@@ -49,6 +49,7 @@ When it refuses, read the message and do what it says. Never work around it.
 | `together.md` | Locks, who's on what, taking over, more than one person or agent |
 | `conversations.md` | People, inboxes, threads, promises, follow-ups, do-not-contact |
 | `changes.md` | Changing something and measuring it later: baselines, checks, verdicts, the headline |
+| `briefs.md` | Handing work to another desk, or taking on a task whose source is `brief:<id>` |
 | `voice.md` | Writing anything in the person's name |
 | `hosting.md` | Sharing the database between people or machines, tokens, backups |
 

@@ -264,6 +264,7 @@ CREATE INDEX IF NOT EXISTS actions_about ON actions(about);
 CREATE INDEX IF NOT EXISTS log_desk ON log(desk, at);
 CREATE INDEX IF NOT EXISTS log_about ON log(about, at);
 CREATE INDEX IF NOT EXISTS tasks_due ON tasks(desk, status, due);
+CREATE INDEX IF NOT EXISTS tasks_source ON tasks(source);
 CREATE INDEX IF NOT EXISTS checks_due ON checks(desk, measured_at, check_at);
 CREATE INDEX IF NOT EXISTS holds_about ON holds(about);
 CREATE INDEX IF NOT EXISTS contacts_person ON contacts(person);
@@ -336,6 +337,16 @@ CREATE VIEW due AS
   SELECT desk, 'check', id, 'agent', about,
     'measure ' || metric || coalesce(' after action #' || action_id, ''), check_at FROM checks
     WHERE measured_at IS NULL AND check_at <= date('now');
+
+-- Work one desk gave another (channel desk), and how the task it became is going.
+DROP VIEW IF EXISTS briefs;
+CREATE VIEW briefs AS
+  SELECT a.desk AS from_desk, substr(a.target, 6) AS to_desk, a.id AS action_id, a.kind, a.title,
+    a.status AS brief_status, t.id AS task_id, t.status AS task_status, t.owner, t.due, t.result,
+    t.proof, a.created_at, t.done_at,
+    round(julianday(coalesce(t.done_at, 'now')) - julianday(coalesce(a.sent_at, a.created_at)), 1) AS days
+  FROM actions a LEFT JOIN tasks t ON t.source = 'brief:' || a.id
+  WHERE a.channel = 'desk';
 
 -- Who holds what, and for how long.
 DROP VIEW IF EXISTS held;
@@ -436,6 +447,16 @@ BEGIN
   SELECT RAISE(ABORT, 'first_*, version, stage and approval fields are set by the database')
     WHERE NEW.first_payload IS NOT NULL OR NEW.version <> 1 OR NEW.approved_version IS NOT NULL
        OR NEW.mode IS NOT NULL OR NEW.trust_counted_at IS NOT NULL;
+  SELECT RAISE(ABORT, 'a brief goes to another desk in this database: target is desk:<name>')
+    WHERE NEW.channel = 'desk' AND (NEW.target NOT LIKE 'desk:%' OR substr(NEW.target, 6) = NEW.desk
+      OR NOT EXISTS (SELECT 1 FROM desks WHERE name = substr(NEW.target, 6)));
+  SELECT RAISE(ABORT, 'a brief says how we will know it is done: set payload.done_when')
+    WHERE NEW.channel = 'desk' AND trim(coalesce(json_extract(NEW.payload, '$.done_when'), '')) = '';
+  SELECT RAISE(ABORT, 'a brief goes to the desk''s agent or a builder: payload.owner is agent or builder')
+    WHERE NEW.channel = 'desk' AND coalesce(json_extract(NEW.payload, '$.owner'), 'agent') NOT IN ('agent','builder');
+  SELECT RAISE(ABORT, 'a brief''s payload.due is a date: YYYY-MM-DD')
+    WHERE NEW.channel = 'desk' AND json_extract(NEW.payload, '$.due') IS NOT NULL
+      AND date(json_extract(NEW.payload, '$.due')) IS NOT json_extract(NEW.payload, '$.due');
 END;
 DROP TRIGGER IF EXISTS action_insert;
 CREATE TRIGGER action_insert AFTER INSERT ON actions
@@ -562,6 +583,32 @@ BEGIN
     WHERE NEW.mode IS 'auto' AND NOT EXISTS (SELECT 1 FROM active_allowed a WHERE a.desk = OLD.desk
       AND a.kind = OLD.kind AND a.channel = OLD.channel AND a.identity = OLD.identity);
 END;
+-- A brief can be edited while it waits, so it is checked again as it goes.
+DROP TRIGGER IF EXISTS brief_send_gate;
+CREATE TRIGGER brief_send_gate BEFORE UPDATE OF status ON actions
+WHEN NEW.status = 'sending' AND OLD.status IS NOT 'sending' AND NEW.channel = 'desk'
+BEGIN
+  SELECT RAISE(ABORT, 'a brief goes to another desk in this database: target is desk:<name>')
+    WHERE NEW.target NOT LIKE 'desk:%' OR substr(NEW.target, 6) = NEW.desk
+      OR NOT EXISTS (SELECT 1 FROM desks WHERE name = substr(NEW.target, 6));
+  SELECT RAISE(ABORT, 'a brief says how we will know it is done: set payload.done_when')
+    WHERE trim(coalesce(json_extract(NEW.payload, '$.done_when'), '')) = '';
+  SELECT RAISE(ABORT, 'a brief goes to the desk''s agent or a builder: payload.owner is agent or builder')
+    WHERE coalesce(json_extract(NEW.payload, '$.owner'), 'agent') NOT IN ('agent','builder');
+  SELECT RAISE(ABORT, 'a brief''s payload.due is a date: YYYY-MM-DD')
+    WHERE json_extract(NEW.payload, '$.due') IS NOT NULL
+      AND date(json_extract(NEW.payload, '$.due')) IS NOT json_extract(NEW.payload, '$.due');
+END;
+-- A brief is sent once its task exists, so it is never recorded as delivered without one.
+DROP TRIGGER IF EXISTS brief_sent_has_task;
+CREATE TRIGGER brief_sent_has_task BEFORE UPDATE OF status ON actions
+WHEN NEW.status = 'sent' AND OLD.status IS NOT 'sent' AND NEW.channel = 'desk'
+BEGIN
+  SELECT RAISE(ABORT, 'a brief is sent by delivering it as a task: node desks/desk.mjs send <id>')
+    WHERE NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = CAST(substr(NEW.provider_ref, 6) AS INTEGER)
+      AND 'task:' || t.id = NEW.provider_ref AND t.source = 'brief:' || NEW.id AND t.desk = substr(NEW.target, 6));
+END;
+
 DROP TRIGGER IF EXISTS action_sending;
 CREATE TRIGGER action_sending AFTER UPDATE OF status ON actions
 WHEN NEW.status = 'sending' AND OLD.status IS NOT 'sending'
@@ -634,6 +681,31 @@ BEGIN
     '#' || NEW.id || ' ' || NEW.kind || ': ' || OLD.status || ' > ' || NEW.status
       || coalesce(' (' || NEW.mode || ')', '') || coalesce(': ' || NEW.result, ''),
     NEW.provider_ref);
+END;
+
+-- A task from a brief (source brief:<action id>) only comes from delivering that brief, once:
+-- desk.mjs send makes it while the brief is being sent.
+DROP TRIGGER IF EXISTS task_from_brief;
+CREATE TRIGGER task_from_brief BEFORE INSERT ON tasks WHEN NEW.source LIKE 'brief:%'
+BEGIN
+  SELECT RAISE(ABORT, 'a task from a brief is made by sending the brief: node desks/desk.mjs send <id>')
+    WHERE NOT EXISTS (SELECT 1 FROM actions a WHERE a.id = CAST(substr(NEW.source, 7) AS INTEGER)
+      AND 'brief:' || a.id = NEW.source AND a.channel = 'desk' AND a.status = 'sending' AND a.target = 'desk:' || NEW.desk);
+  SELECT RAISE(ABORT, 'that brief was delivered already')
+    WHERE EXISTS (SELECT 1 FROM tasks t WHERE t.source = NEW.source);
+END;
+
+-- When a desk closes the task a brief gave it, the briefing desk hears how it went.
+DROP TRIGGER IF EXISTS task_from_brief_closed;
+CREATE TRIGGER task_from_brief_closed AFTER UPDATE OF status ON tasks
+WHEN NEW.source LIKE 'brief:%' AND NEW.status IN ('done','dropped','blocked') AND NEW.status IS NOT OLD.status
+BEGIN
+  INSERT INTO log(desk, by, kind, about, action_id, summary, details)
+    SELECT a.desk, 'desk:' || NEW.desk, 'status', 'task:' || NEW.id, a.id,
+      'brief #' || a.id || ' to ' || NEW.desk || ': task ' || NEW.id || ' ' || NEW.status
+        || coalesce(': ' || NEW.result, ''),
+      json_object('task', NEW.id, 'status', NEW.status, 'result', NEW.result, 'proof', NEW.proof)
+    FROM actions a WHERE a.id = CAST(substr(NEW.source, 7) AS INTEGER) AND 'brief:' || a.id = NEW.source;
 END;
 
 DROP TRIGGER IF EXISTS action_touched;

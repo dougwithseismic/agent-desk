@@ -2,6 +2,23 @@
 
 What changed in the desk kit, newest first. Update a project with `node bin/kit.mjs <project>`.
 
+## 2026-11-01
+
+### One desk can hand work to another with a brief (PRD 11) · New
+- A desk writes a brief for another desk: the job, why it matters, and how both will know
+  it's done. Once it's approved, `node desks/desk.mjs send <id>` delivers it as a task on
+  that desk, and a chat listening to that desk wakes for it.
+- Briefs earn trust like emails do: a person approves the first ones, then they go on
+  their own, with every fifth shown in full.
+- When the other desk finishes, drops or blocks the task, the desk that asked hears how
+  it went in its log. `status` shows each desk's open briefs and the oldest one's age.
+- How to write, take on and close one: `desks/kit/playbooks/briefs.md`.
+
+### Numbers given to SQL behave the same on a local database as on a hosted one · Fixed
+- `-a id=5` used to reach a local database as 5.0, so `'brief:' || :id` read `brief:5.0`
+  and a number written to a text column was stored as `5.0`. Whole numbers now go in as
+  integers, as they always did on a hosted database.
+
 ## 2026-10-30
 
 ### "/desk <name> listen" is understood straight away · Fixed
