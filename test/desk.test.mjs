@@ -1668,3 +1668,238 @@ test('a failed audit takes trust away and says why; audit_due lists what went ou
   await p.sql(audit(`action:${a1}`, 'pass', { by: 'doug2', notes: 'rate fixed in the follow-up' }));
   assert.deepEqual((await p.sql('SELECT checked FROM audit_findings')).map((r) => r.checked), [`measure:${m}`]);
 });
+
+// ---------- Stripe ----------
+
+// A stand-in for Stripe's API: lists with Stripe's paging, its error shapes, and a log of
+// every request. Pages are two objects long, so every summary has to follow them.
+async function fakeStripe(fixtures) {
+  const s = { requests: [], key: 'rk_test_desk123', forbid: [] };
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://stripe');
+    const q = url.searchParams;
+    const name = url.pathname.replace(/^\/v1\//, '');
+    s.requests.push({ method: req.method, name, query: Object.fromEntries(q) });
+    const send = (status, out) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(out)); };
+    const given = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
+    if (given !== s.key) return send(401, { error: { type: 'invalid_request_error', message: `Invalid API Key provided: ${given.slice(0, 8)}****${given.slice(-4)}` } });
+    if (req.method !== 'GET') return send(405, { error: { message: 'only reads here' } });
+    if (s.forbid.includes(name)) return send(403, { error: { type: 'invalid_request_error', message: 'The provided key does not have the required permissions for this endpoint' } });
+    let list = fixtures[name];
+    if (!list) return send(404, { error: { type: 'invalid_request_error', message: `Unrecognized request URL (GET: ${url.pathname})` } });
+    if (q.get('status')) list = list.filter((o) => o.status === q.get('status'));
+    if (q.get('created[gte]')) list = list.filter((o) => o.created >= Number(q.get('created[gte]')));
+    const start = q.get('starting_after') ? list.findIndex((o) => o.id === q.get('starting_after')) + 1 : 0;
+    const size = Math.min(Number(q.get('limit') ?? 10), 2);
+    send(200, { object: 'list', url: url.pathname, has_more: start + size < list.length, data: list.slice(start, start + size) });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  servers.push(server);
+  s.env = { DESK_STRIPE_URL: `http://127.0.0.1:${server.address().port}`, DESK_STRIPE_KEY: s.key };
+  return s;
+}
+
+const ago = (days) => Math.floor(Date.now() / 1000) - Math.round(days * 86400);
+const price = (unit_amount, interval, interval_count = 1, extra = {}) =>
+  ({ unit_amount, recurring: { interval, interval_count, usage_type: 'licensed' }, ...extra });
+const sub = (id, status, currency, ...items) =>
+  ({ id, object: 'subscription', status, currency, items: { data: items.map(([p, quantity = 1]) => ({ price: p, quantity })) } });
+const stripeData = () => ({
+  balance_transactions: [
+    { id: 'txn_1', type: 'charge', amount: 5000, fee: 175, net: 4825, currency: 'usd', created: ago(2) },
+    { id: 'txn_2', type: 'payout', amount: -4000, fee: 0, net: -4000, currency: 'usd', created: ago(3) },
+    { id: 'txn_3', type: 'refund', amount: -2000, fee: 0, net: -2000, currency: 'usd', created: ago(5) },
+    { id: 'txn_4', type: 'payment', amount: 2000, fee: 88, net: 1912, currency: 'usd', created: ago(10) },
+    { id: 'txn_5', type: 'charge', amount: 3000, fee: 100, net: 2900, currency: 'eur', created: ago(12) },
+    { id: 'txn_6', type: 'charge', amount: 9999, fee: 300, net: 9699, currency: 'usd', created: ago(40) },
+    { id: 'txn_7', type: 'charge', amount: 5000, fee: 150, net: 4850, currency: 'kwd', created: ago(6) },
+  ],
+  subscriptions: [
+    sub('sub_1', 'active', 'usd', [price(12000, 'year')]),
+    sub('sub_2', 'active', 'usd', [price(2500, 'month'), 2]),
+    sub('sub_3', 'past_due', 'usd', [price(1000, 'week')]),
+    sub('sub_4', 'active', 'usd', [price(6000, 'month', 3)], [price(40, 'month', 1, { recurring: { interval: 'month', interval_count: 1, usage_type: 'metered' } })]),
+    sub('sub_5', 'canceled', 'usd', [price(99999, 'month')]),
+    sub('sub_6', 'active', 'eur', [price(900, 'month')]),
+    sub('sub_7', 'active', 'usd', [{ unit_amount: null, billing_scheme: 'tiered', recurring: { interval: 'month', interval_count: 1 } }]),
+  ],
+  customers: [
+    { id: 'cus_a', object: 'customer', created: ago(3) },
+    { id: 'cus_b', object: 'customer', created: ago(5) },
+    { id: 'cus_old', object: 'customer', created: ago(60) },
+  ],
+  charges: [
+    { id: 'ch_1', object: 'charge', customer: 'cus_a', amount: 5000, currency: 'usd', paid: true, status: 'succeeded', created: ago(2) },
+    { id: 'ch_2', object: 'charge', customer: 'cus_b', amount: 2000, currency: 'usd', paid: false, status: 'failed', created: ago(1) },
+    { id: 'ch_3', object: 'charge', customer: 'cus_old', amount: 700, currency: 'usd', paid: true, status: 'succeeded', created: ago(4) },
+    { id: 'ch_4', object: 'charge', customer: 'cus_old', amount: 900, currency: 'usd', paid: false, status: 'failed', created: ago(45) },
+  ],
+  invoices: [
+    { id: 'in_1', status: 'open', currency: 'usd', due_date: ago(3), attempted: false, amount_due: 4000, amount_remaining: 4000 },
+    { id: 'in_2', status: 'open', currency: 'usd', due_date: ago(-5), attempted: false, amount_due: 3000, amount_remaining: 3000 },
+    { id: 'in_3', status: 'open', currency: 'usd', due_date: null, attempted: true, amount_due: 1500, amount_remaining: 1500 },
+    { id: 'in_4', status: 'paid', currency: 'usd', due_date: ago(9), attempted: true, amount_due: 800, amount_remaining: 0 },
+    { id: 'in_5', status: 'open', currency: 'usd', due_date: null, attempted: false, amount_due: 600, amount_remaining: 600 },
+  ],
+});
+
+test('stripe reads one path with one GET and prints what Stripe said; --all follows the pages', async () => {
+  const s = await fakeStripe(stripeData());
+  const p = await project({ gm: {} });
+  const r = await p.run(['stripe', 'charges', 'limit=3'], { env: s.env });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(s.requests, [{ method: 'GET', name: 'charges', query: { limit: '3' } }]);
+  const one = JSON.parse(r.out);
+  assert.equal(one.object, 'list');
+  assert.deepEqual(one.data.map((c) => c.id), ['ch_1', 'ch_2']);
+  assert.equal(one.has_more, true);
+
+  const all = await p.run(['stripe', 'charges', '--all'], { env: s.env });
+  assert.equal(all.code, 0, all.err);
+  assert.deepEqual(JSON.parse(all.out).data.map((c) => c.id), ['ch_1', 'ch_2', 'ch_3', 'ch_4']);
+  assert.deepEqual(s.requests.slice(1).map((x) => x.query.starting_after), [undefined, 'ch_2']);
+});
+
+test('stripe only reads: a live secret key, a write and anything but name=value stop before a request', async () => {
+  const s = await fakeStripe(stripeData());
+  const p = await project({ gm: {} });
+  const live = await p.run(['stripe', 'charges'], { env: { ...s.env, DESK_STRIPE_KEY: 'sk_live_secret987' } });
+  assert.equal(live.code, 1);
+  assert.match(live.err, /live secret key[\s\S]*make a restricted key with read access/);
+  for (const args of [['post', 'refunds'], ['delete'], ['cancel', 'subscriptions/sub_1']]) {
+    const r = await p.run(['stripe', ...args], { env: s.env });
+    assert.equal(r.code, 1, args.join(' '));
+    assert.match(r.err, /only reads: a change in Stripe is a person's, made in the Dashboard/, args.join(' '));
+  }
+  for (const args of [['refunds', 'charge'], ['charges', '-X', 'POST'], ['charges', '--method', 'post']]) {
+    const r = await p.run(['stripe', ...args], { env: s.env });
+    assert.equal(r.code, 1, args.join(' '));
+    assert.match(r.err, /only reads, with name=value pairs/, args.join(' '));
+  }
+  const elsewhere = await p.run(['stripe', 'charges'], { env: { ...s.env, DESK_STRIPE_KEY: 'rk_live_real555' } });
+  assert.equal(elsewhere.code, 1);
+  assert.match(elsewhere.err, /a live key goes only to https:\/\/api\.stripe\.com/);
+  const odd = await p.run(['stripe', 'charges?expand=customer'], { env: s.env });
+  assert.equal(odd.code, 1);
+  assert.match(odd.err, /isn't a Stripe path/);
+  assert.equal(s.requests.length, 0);
+  assert.ok(!(live.out + live.err + elsewhere.out + elsewhere.err).match(/secret987|real555/));
+});
+
+test('stripe revenue is charges minus refunds in the window, per currency, and --record saves one number', async () => {
+  const s = await fakeStripe(stripeData());
+  const p = await project({ gm: {} });
+  const r = await p.run(['stripe', 'revenue', '--days', '28'], { env: s.env });
+  assert.equal(r.code, 0, r.err);
+  const out = JSON.parse(r.out);
+  assert.equal(out.mode, 'test');
+  assert.equal(out.days, 28);
+  assert.deepEqual(out.currencies.usd, { revenue: 50, charged: 70, refunded: 20, fees: 2.63, net: 47.37, charges: 2, refunds: 1 });
+  assert.equal(out.currencies.eur.revenue, 30);
+  assert.equal(out.currencies.kwd.revenue, 5, 'KWD comes in thousandths');
+  assert.ok(s.requests.every((x) => x.method === 'GET' && x.query['created[gte]'] === String(Math.floor(Date.parse(out.from) / 1000))));
+
+  const two = await p.run(['stripe', 'revenue', '--days', '28', '--record', 'revenue-28d', '--desk', 'gm'], { env: s.env });
+  assert.equal(two.code, 1);
+  assert.match(two.err, /add --currency \(USD, EUR, KWD\)/);
+  assert.equal((await p.one('SELECT count(*) AS n FROM measures')).n, 0);
+
+  const rec = await p.run(['stripe', 'revenue', '--days', '28', '--currency', 'usd', '--record', 'revenue-28d', '--desk', 'gm'], { env: s.env });
+  assert.equal(rec.code, 0, rec.err);
+  assert.deepEqual(JSON.parse(rec.out).recorded, { desk: 'gm', name: 'revenue-28d', value: 50, unit: 'USD' });
+  const today = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10);
+  assert.deepEqual(await p.sql('SELECT desk, name, value, unit, period_from, period_to, source, by FROM measures'), [{
+    desk: 'gm', name: 'revenue-28d', value: 50, unit: 'USD', period_from: from, period_to: today,
+    source: 'stripe revenue --days 28 --currency usd (test mode)', by: 'doug',
+  }]);
+
+  const quiet = await p.run(['stripe', 'revenue', '--days', '1', '--currency', 'usd', '--record', 'revenue-1d', '--desk', 'gm'], { env: s.env });
+  assert.equal(quiet.code, 0, quiet.err);
+  assert.equal((await p.one("SELECT value FROM measures WHERE name = 'revenue-1d'")).value, 0, 'a day with no sales is 0, not a gap');
+
+  const raw = await p.run(['stripe', 'charges', 'limit=1', '--record', 'x', '--desk', 'gm'], { env: s.env });
+  assert.equal(raw.code, 1);
+  assert.match(raw.err, /--days, --currency and --record are for the summaries/);
+  for (const [args, said] of [[['charges', '--limit', '3'], /limit as a pair: limit=3/], [['mrr', '--days', '7'], /as of now, with no window/],
+    [['customers', '--currency', 'usd'], /isn't counted per currency/]]) {
+    const r = await p.run(['stripe', ...args], { env: s.env });
+    assert.equal(r.code, 1, args.join(' '));
+    assert.match(r.err, said);
+  }
+  const nowhere = await p.run(['stripe', 'revenue', '--currency', 'usd', '--record', 'x', '--desk', 'gm-desk'], { env: s.env });
+  assert.equal(nowhere.code, 1);
+  assert.match(nowhere.err, /no desk called gm-desk/);
+  assert.equal((await p.one('SELECT count(*) AS n FROM measures')).n, 2);
+});
+
+test('stripe mrr makes every active and past-due item monthly, per currency, and says what it skipped', async () => {
+  const s = await fakeStripe(stripeData());
+  const p = await project({ gm: {} });
+  const r = await p.run(['stripe', 'mrr'], { env: s.env });
+  assert.equal(r.code, 0, r.err);
+  const out = JSON.parse(r.out);
+  // 12000 a year, 2 x 2500 a month, 1000 a week, 6000 every three months: 1000 + 5000 + 4333.33 + 2000
+  assert.deepEqual(out.currencies.usd, { mrr: 123.33, subscriptions: 5, past_due: 1, skipped: 2 });
+  assert.deepEqual(out.currencies.eur, { mrr: 9, subscriptions: 1, past_due: 0, skipped: 0 });
+  assert.equal(out.days, undefined);
+  assert.deepEqual([...new Set(s.requests.map((x) => x.query.status))], ['active', 'past_due']);
+
+  const rec = await p.run(['stripe', 'mrr', '--currency', 'EUR', '--record', 'mrr', '--desk', 'gm'], { env: s.env });
+  assert.equal(rec.code, 0, rec.err);
+  assert.deepEqual(await p.one('SELECT value, unit, period_from, source FROM measures'),
+    { value: 9, unit: 'EUR/month', period_from: null, source: 'stripe mrr --currency eur (test mode)' });
+});
+
+test('stripe customers and failed count new customers who paid, failed payments and invoices past due', async () => {
+  const s = await fakeStripe(stripeData());
+  const p = await project({ gm: {} });
+  const c = await p.run(['stripe', 'customers', '--days', '28'], { env: s.env });
+  assert.equal(c.code, 0, c.err);
+  const customers = JSON.parse(c.out);
+  assert.equal(customers.new, 2);
+  assert.equal(customers.paid, 1);
+
+  const f = await p.run(['stripe', 'failed', '--days', '28'], { env: s.env });
+  assert.equal(f.code, 0, f.err);
+  assert.deepEqual(JSON.parse(f.out).currencies.usd, { failed_payments: 1, failed_amount: 20, past_due_invoices: 2, past_due_amount: 55 });
+
+  const plain = await p.run(['stripe', 'customers', 'limit=2'], { env: s.env });
+  assert.equal(plain.code, 0, plain.err);
+  assert.deepEqual(JSON.parse(plain.out).data.map((x) => x.id), ['cus_a', 'cus_b']);
+
+  s.forbid.push('invoices');
+  const shut = await p.run(['stripe', 'failed'], { env: s.env });
+  assert.equal(shut.code, 1);
+  assert.match(shut.err, /the key can't read invoices \(403/);
+});
+
+test('a missing, mistyped or refused Stripe key is named by stripe and doctor, never printed', async () => {
+  const s = await fakeStripe(stripeData());
+  const p = await project({ gm: { needs: 'DESK_STRIPE_KEY' } });
+  const none = await p.run(['stripe', 'revenue'], { env: { DESK_STRIPE_URL: s.env.DESK_STRIPE_URL } });
+  assert.equal(none.code, 1);
+  assert.match(none.err, /DESK_STRIPE_KEY is not set: put a restricted key/);
+  const docNone = await p.run(['doctor'], { env: { DESK_STRIPE_URL: s.env.DESK_STRIPE_URL } });
+  assert.match(docNone.out, /fix +gm needs DESK_STRIPE_KEY/);
+
+  const odd = await p.run(['stripe', 'revenue'], { env: { ...s.env, DESK_STRIPE_KEY: 'pk_test_public555' } });
+  assert.match(odd.err, /isn't a key this command takes/);
+  assert.equal(s.requests.length, 0);
+
+  const wrong = { ...s.env, DESK_STRIPE_KEY: 'rk_test_wrong4321' };
+  const refused = await p.run(['stripe', 'charges'], { env: wrong });
+  assert.equal(refused.code, 1);
+  assert.match(refused.err, /Stripe refused DESK_STRIPE_KEY \(401/);
+  const doc = await p.run(['doctor'], { env: wrong });
+  assert.match(doc.out, /fix +Stripe refused DESK_STRIPE_KEY/);
+  const live = await p.run(['doctor'], { env: { ...s.env, DESK_STRIPE_KEY: 'sk_live_secret987' } });
+  assert.match(live.out, /fix +DESK_STRIPE_KEY is a live secret key/);
+  for (const r of [none, docNone, odd, refused, doc, live]) {
+    assert.ok(!/rk_test_wrong|4321|sk_live_secret|public555/.test(r.out + r.err), r.out + r.err);
+  }
+
+  const good = await p.run(['doctor'], { env: s.env });
+  assert.match(good.out, /ok +Stripe reads in test mode/);
+  assert.deepEqual(s.requests.at(-1), { method: 'GET', name: 'balance_transactions', query: { limit: '1' } });
+});

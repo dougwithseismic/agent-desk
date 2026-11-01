@@ -55,6 +55,7 @@ When it refuses, read the message and do what it says. Never work around it.
 | `changes.md` | Changing something and measuring it later: baselines, checks, verdicts, the headline |
 | `briefs.md` | Handing work to another desk, or taking on a task whose source is `brief:<id>` |
 | `audits.md` | Checking another desk's work that went out alone, or a number it reported |
+| `revenue.md` | Reading Stripe: the key, revenue, MRR, customers, failed payments, recording them |
 | `voice.md` | Writing anything in the person's name |
 | `hosting.md` | Sharing the database between people or machines, tokens, backups |
 

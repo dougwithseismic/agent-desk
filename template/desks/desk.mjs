@@ -23,6 +23,9 @@
 //   node desks/desk.mjs mail status|suppressions  the Worker's addresses, sends and caps; who never gets mail
 //   node desks/desk.mjs mail suppress <address> "<reason>"
 //   node desks/desk.mjs send <action id>          send an approved email action exactly as stored, and record it
+//   node desks/desk.mjs stripe <path> [name=value ...]  read Stripe: one GET, printed as JSON (--all follows pages)
+//   node desks/desk.mjs stripe revenue|mrr|customers|failed  what the business earns (--days, --currency;
+//                                                 --record <name> --desk <desk> saves it in measures)
 //
 // In SQL, :me is you (DESK_USER), :now the time, :today the date and :desk the --desk value.
 // An agent works under its own name with --as <name> (or DESK_AS in the environment), for a
@@ -44,6 +47,8 @@
 //   DESK_MAIL_TOKEN  that Worker's MAIL_API_TOKEN
 //   DESK_MAIL_PREFIX  the word inbox ids for mail start with: mail (the default), or the one
 //                     a project's own Worker already uses (acme-mail:<mailbox>:<id>)
+//   DESK_STRIPE_KEY  a restricted Stripe key with read access (rk_live_ or rk_test_), or a test
+//                    secret key (sk_test_); a live secret key is refused (kit/playbooks/revenue.md)
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -103,6 +108,9 @@ const isPerson = (name) => Boolean(PERSON) && name === PERSON.toLowerCase();
 const isWord = (x) => /^[a-z][a-z0-9-]*$/.test(x);
 const HOSTED = /^(https?|libsql):\/\//.test(DB);
 const MAIL_URL = setting('DESK_MAIL_URL')?.replace(/\/+$/, '');
+const STRIPE_KEY = setting('DESK_STRIPE_KEY');
+const STRIPE_URL = setting('DESK_STRIPE_URL', 'https://api.stripe.com').replace(/\/+$/, '');
+const STRIPE_MODE = /^(rk|sk)_test_/.test(STRIPE_KEY ?? '') ? 'test' : 'live';
 const MAIL_TOKEN = setting('DESK_MAIL_TOKEN');
 const MAIL_PREFIX = setting('DESK_MAIL_PREFIX', 'mail');
 
@@ -428,7 +436,8 @@ function parseArgs(argv) {
     else if (a === '--where') flags.where = argv[++i];
     else if (a === '--as') flags.as = argv[++i] ?? fail('--as needs the name of an agent, from an Agent: line');
     else if (a === '--every' || a === '--max') flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a time, such as 30s or 25m`);
-    else if (a === '--limit' || a === '--key') flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a value`);
+    else if (['--limit', '--key', '--days', '--currency', '--record'].includes(a)) flags[a.slice(2)] = argv[++i] ?? fail(`${a} needs a value`);
+    else if (a === '--all') flags.all = true;
     else if (a === '--mailbox') flags.mailbox = [...(flags.mailbox ?? []), argv[++i] ?? fail('--mailbox needs an address')];
     else if (a === '-a' || a === '--arg') {
       const kv = argv[++i] ?? '';
@@ -1483,6 +1492,16 @@ async function doctor() {
     }
   }
 
+  if (STRIPE_KEY) {
+    try {
+      const t0 = Date.now();
+      await stripeGet('balance_transactions', [['limit', '1']]);
+      ok(`Stripe reads in ${STRIPE_MODE} mode, in ${Date.now() - t0} ms`);
+    } catch (e) {
+      bad(e.message);
+    }
+  }
+
   if (!HOSTED) {
     const file = localPath(DB);
     if (fs.existsSync(file)) {
@@ -1543,6 +1562,200 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+// ---------- Stripe: read what the business earns (kit/playbooks/revenue.md) ----------
+// Reads only. Every request is a GET, and a live secret key, which could change things, is
+// refused before any call. Changes in Stripe are a person's, in the Dashboard.
+
+function stripeKeyFault() {
+  if (!STRIPE_KEY) return 'DESK_STRIPE_KEY is not set: put a restricted key with read access (rk_live_ or rk_test_) in desks/.env (kit/playbooks/revenue.md)';
+  if (STRIPE_KEY.startsWith('sk_live_')) return 'DESK_STRIPE_KEY is a live secret key, which can change things in Stripe: make a restricted key with read access and use that (kit/playbooks/revenue.md)';
+  if (!/^(rk_live|rk_test|sk_test)_[A-Za-z0-9]+$/.test(STRIPE_KEY)) return "DESK_STRIPE_KEY isn't a key this command takes: it starts rk_live_, rk_test_ or sk_test_";
+  if (STRIPE_MODE === 'live' && STRIPE_URL !== 'https://api.stripe.com') return 'a live key goes only to https://api.stripe.com: take DESK_STRIPE_URL out of desks/.env';
+  return null;
+}
+// Stripe's messages may quote part of a key; never pass one on.
+const unkeyed = (text) => String(text).replace(/\b(sk|rk|pk)_(live|test)_[A-Za-z0-9*]+/g, '<key>');
+
+async function stripeGet(route, query = []) {
+  const fault = stripeKeyFault();
+  if (fault) fail(fault);
+  const url = new URL(`${STRIPE_URL}/v1/${route}`);
+  for (const [k, v] of query) url.searchParams.append(k, v);
+  let res, text;
+  try {
+    res = await fetch(url, { method: 'GET', headers: { authorization: `Bearer ${STRIPE_KEY}` }, redirect: 'manual', signal: AbortSignal.timeout(30000) });
+    text = await res.text();
+  } catch (e) {
+    fail(`could not reach Stripe at ${url.host} (${e.cause?.code || e.name})`);
+  }
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  const why = unkeyed(said(json, text));
+  if (res.status === 401) fail(`Stripe refused DESK_STRIPE_KEY (401: ${why}): it may be mistyped or revoked; make a new restricted key`);
+  if (res.status === 403) fail(`the key can't read ${route} (403: ${why}): give the restricted key read access to it (kit/playbooks/revenue.md)`);
+  if (res.status !== 200 || !json) fail(`Stripe answered ${res.status} for ${route}: ${why}`);
+  return json;
+}
+
+// Every object in a list, 100 a page, up to 10,000. Search pages by next_page.
+async function stripeAll(route, query = []) {
+  const data = [];
+  const base = [...query.filter(([k]) => k !== 'limit'), ['limit', '100']];
+  let page = await stripeGet(route, base);
+  for (;;) {
+    data.push(...(page.data ?? []));
+    if (data.length >= 10000) return { data: data.slice(0, 10000), more: true };
+    const next = page.next_page ? ['page', page.next_page] : page.has_more && page.data?.length ? ['starting_after', page.data.at(-1).id] : null;
+    if (!next) return { data, more: false };
+    page = await stripeGet(route, [...base.filter(([k]) => k !== next[0]), next]);
+  }
+}
+
+// Amounts come in the currency's smallest unit: cents, nothing smaller for these, and
+// thousandths for the three-decimal ones.
+const ZERO_DECIMAL = new Set(['bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf', 'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf']);
+const THREE_DECIMAL = new Set(['bhd', 'jod', 'kwd', 'omr', 'tnd']);
+const major = (amount, cur) => Math.round(amount) / (ZERO_DECIMAL.has(cur) ? 1 : THREE_DECIMAL.has(cur) ? 1000 : 100);
+const PER_MONTH = { day: 365 / 12, week: 52 / 12, month: 1, year: 1 / 12 };
+const since = (time) => [['created[gte]', String(time)]];
+
+// Each summary reads what it needs into rows, one per currency (row(cur) starts a blank()
+// one), or a single row when it's `overall`. `money` names the fields in the currency's
+// smallest unit, shown in whole units. value() is the number --record saves.
+const stripeSummaries = {
+  revenue: {
+    what: 'charges minus refunds', window: true, money: ['revenue', 'charged', 'refunded', 'fees', 'net'],
+    blank: () => ({ revenue: 0, charged: 0, refunded: 0, fees: 0, net: 0, charges: 0, refunds: 0 }),
+    unit: (cur) => cur.toUpperCase(), value: (r) => r.revenue,
+    async read(time, row) {
+      const { more, data } = await stripeAll('balance_transactions', since(time));
+      for (const t of data) {
+        const charge = ['charge', 'payment'].includes(t.type);
+        if (!charge && !['refund', 'payment_refund'].includes(t.type)) continue;
+        const r = row(t.currency);
+        if (charge) { r.charged += t.amount; r.charges++; } else { r.refunded -= t.amount; r.refunds++; }
+        r.revenue += t.amount;
+        r.fees += t.fee;
+        r.net += t.net;
+      }
+      return { more };
+    },
+  },
+  mrr: {
+    what: 'active and past-due subscriptions, made monthly, before discounts (skipped: tiered or metered items)', window: false, money: ['mrr'],
+    blank: () => ({ mrr: 0, subscriptions: 0, past_due: 0, skipped: 0 }),
+    unit: (cur) => `${cur.toUpperCase()}/month`, value: (r) => r.mrr,
+    async read(time, row) {
+      const pages = await Promise.all(['active', 'past_due'].map((status) => stripeAll('subscriptions', [['status', status]])));
+      for (const sub of pages.flatMap((p) => p.data)) {
+        const r = row(sub.currency);
+        r.subscriptions++;
+        if (sub.status === 'past_due') r.past_due++;
+        for (const item of sub.items?.data ?? []) {
+          const { recurring, unit_amount, unit_amount_decimal } = item.price;
+          const unit = unit_amount ?? (unit_amount_decimal == null ? null : Number(unit_amount_decimal));
+          if (unit == null || recurring.usage_type === 'metered') { r.skipped++; continue; }
+          r.mrr += unit * (item.quantity ?? 1) * PER_MONTH[recurring.interval] / recurring.interval_count;
+        }
+      }
+      return { more: pages.some((p) => p.more) };
+    },
+  },
+  customers: {
+    what: 'new customers', window: true, overall: true,
+    blank: () => ({ new: 0, paid: 0 }),
+    unit: () => 'customers', value: (r) => r.new,
+    async read(time, row) {
+      const [customers, charges] = await Promise.all([stripeAll('customers', since(time)), stripeAll('charges', since(time))]);
+      const fresh = new Set(customers.data.map((c) => c.id));
+      const r = row('all');
+      r.new = fresh.size;
+      r.paid = new Set(charges.data.filter((ch) => ch.status === 'succeeded' && fresh.has(ch.customer)).map((ch) => ch.customer)).size;
+      return { more: customers.more || charges.more };
+    },
+  },
+  failed: {
+    what: 'failed payments in the window, plus open invoices past due (a failed renewal can be in both)', window: true,
+    money: ['failed_amount', 'past_due_amount'],
+    blank: () => ({ failed_payments: 0, failed_amount: 0, past_due_invoices: 0, past_due_amount: 0 }),
+    unit: () => 'to chase', value: (r) => r.failed_payments + r.past_due_invoices,
+    async read(time, row) {
+      const [charges, invoices] = await Promise.all([stripeAll('charges', since(time)), stripeAll('invoices', [['status', 'open']])]);
+      for (const ch of charges.data.filter((x) => x.status === 'failed')) {
+        const r = row(ch.currency);
+        r.failed_payments++;
+        r.failed_amount += ch.amount;
+      }
+      // Past due: an invoice sent to pay by a date that has gone, or one charged automatically
+      // whose charge failed.
+      const now = Date.now() / 1000;
+      for (const i of invoices.data.filter((x) => (x.due_date ? x.due_date < now : x.attempted))) {
+        const r = row(i.currency);
+        r.past_due_invoices++;
+        r.past_due_amount += i.amount_remaining ?? i.amount_due;
+      }
+      return { more: charges.more || invoices.more };
+    },
+  },
+};
+
+async function stripe(flags, args) {
+  const [given, ...pairs] = args;
+  const route = given?.replace(/^\/?(v1\/)?/, '');
+  if (!route) fail('usage: desk.mjs stripe <path> [name=value ...], or stripe revenue|mrr|customers|failed');
+  // stripeGet only ever sends GET; this is for a clearer answer when someone asks for a change.
+  if (/^(post|put|patch|delete|create|update|cancel|refund|pay|void)$/i.test(route)) {
+    fail('the stripe command only reads: a change in Stripe is a person\'s, made in the Dashboard (kit/playbooks/revenue.md)');
+  }
+  const bad = pairs.find((x) => !/^[^=\s]+=/.test(x));
+  if (bad !== undefined) fail(`the stripe command only reads, with name=value pairs for the query: "${bad}" isn't one`);
+  if (!/^[a-z][a-z0-9_]*(\/[A-Za-z0-9_]+)*$/.test(route)) fail(`"${route}" isn't a Stripe path: give it like charges, customers/cus_123 or balance_transactions`);
+  if (flags.limit) fail(`stripe takes the limit as a pair: limit=${flags.limit}`);
+  const summary = !pairs.length && Object.hasOwn(stripeSummaries, route) ? stripeSummaries[route] : null;
+  if (!summary) {
+    if (flags.record || flags.days || flags.currency) fail('--days, --currency and --record are for the summaries: stripe revenue, mrr, customers or failed, with no name=value pairs');
+    const query = pairs.map((x) => { const i = x.indexOf('='); return [x.slice(0, i), x.slice(i + 1)]; });
+    if (!flags.all) { console.log(JSON.stringify(await stripeGet(route, query), null, 2)); return 0; }
+    const { data, more } = await stripeAll(route, query);
+    console.log(JSON.stringify({ object: 'list', data, has_more: more }, null, 2));
+    return 0;
+  }
+  if (flags.days && !summary.window) fail(`stripe ${route} is as of now, with no window: leave out --days`);
+  if (flags.currency && summary.overall) fail(`stripe ${route} isn't counted per currency: leave out --currency`);
+  const days = Number(flags.days ?? 28);
+  if (!Number.isInteger(days) || days < 1 || days > 3650) fail('--days is a whole number of days, such as 28');
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 86400000);
+  const by = {};
+  const { more } = await summary.read(Math.floor(from.getTime() / 1000), (key) => (by[key] ??= summary.blank()));
+  const cur = flags.currency?.toLowerCase();
+  const keys = cur ? [cur] : Object.keys(by);
+  const rows = Object.fromEntries(keys.map((k) => {
+    const r = by[k] ?? summary.blank();
+    return [k, { ...r, ...Object.fromEntries((summary.money ?? []).map((f) => [f, major(r[f], k)])) }];
+  }));
+  const out = { mode: STRIPE_MODE, what: summary.what, ...(summary.window ? { days, from: from.toISOString(), to: to.toISOString() } : { at: to.toISOString() }),
+    ...(summary.overall ? rows.all : { currencies: rows }), ...(more ? { capped: 'stopped at 10,000 objects: the numbers are short' } : {}) };
+  if (flags.record) {
+    const desk = deskOf(flags) ?? fail('--record needs --desk <name>');
+    if (!desksOnDisk().some((d) => d.name === desk)) fail(`no desk called ${desk}: a desk is a folder in desks/ with a desk.md`);
+    if (keys.length !== 1) {
+      fail(keys.length ? `--record saves one number: add --currency (${keys.join(', ').toUpperCase()})` : 'Stripe had nothing for this: add --currency <code> to record 0');
+    }
+    const value = summary.value(rows[keys[0]]);
+    const unit = summary.unit(keys[0]);
+    await query(`INSERT INTO measures(desk, name, value, unit, period_from, period_to, source, by)
+      VALUES (:desk, :name, :value, :unit, :from, :to, :source, :me)`, {
+      desk, name: flags.record, value, unit,
+      from: summary.window ? from.toISOString().slice(0, 10) : null, to: to.toISOString().slice(0, 10),
+      source: `stripe ${route}${summary.window ? ` --days ${days}` : ''}${cur ? ` --currency ${cur}` : ''} (${STRIPE_MODE} mode)`,
+    });
+    out.recorded = { desk, name: flags.record, value, unit };
+  }
+  console.log(JSON.stringify(out, null, 2));
+  return 0;
+}
+
 function help() {
   const lines = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1);
   const end = lines.findIndex((l) => !l.startsWith('//'));
@@ -1592,6 +1805,7 @@ async function main() {
     case 'watch': return watch(flags, args[0]);
     case 'mail': return mail(flags, args);
     case 'send': return send(flags, args[0]);
+    case 'stripe': return stripe(flags, args);
     case undefined: case 'help': case '--help': case '-h':
       console.log(help());
       return 0;

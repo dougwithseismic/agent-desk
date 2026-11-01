@@ -41,12 +41,20 @@ A listening chat hears more than mail: the agent's tasks and checks as they come
 the desk's schedule, a `Round:` line such as `Round: weekdays 09:00`, where it runs a
 round. A desk without mail can listen for those alone. `status` shows who is listening.
 
+### Desks that read revenue
+
+`node desks/desk.mjs stripe revenue` (or `mrr`, `customers`, `failed`) reads what the
+business earns from Stripe with a restricted, read-only key in `desks/.env`, and
+`--record` saves it as the desk's headline. Any other read is `stripe <path>`. It only
+sends GETs and refuses a live secret key: changes in Stripe stay with a person
+(`desks/kit/playbooks/revenue.md`).
+
 ## What lands in a project
 
 ```text
 desks/
   desk.mjs          the one script: init, status, sql, lock, take, export, dump, doctor,
-                    and watch, mail and send for desks that answer mail
+                    watch, mail and send for desks that answer mail, and stripe
   kit/              core schema, playbooks, guide and worked examples (replaced on update)
   .env              DESK_USER, and the hosted database's address and token (never in git)
   data/             the local database and private files (never in git)

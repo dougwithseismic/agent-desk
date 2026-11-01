@@ -4,6 +4,19 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-01
 
+### A desk can read what the business earns from Stripe (PRD 14) · New
+- `node desks/desk.mjs stripe revenue` gives charges minus refunds over the last 28 days
+  (or `--days`), with fees and what's left after them, per currency. `stripe mrr` gives
+  monthly recurring revenue, `stripe customers` new customers and how many paid, and
+  `stripe failed` failed payments and invoices past due.
+- `--record revenue-28d --desk gm` saves the figure in `measures`, with its window and
+  whether it came from test or live mode, so it can be a desk's headline.
+- `stripe <path> [name=value ...]` reads anything else, such as `stripe charges limit=3`;
+  `--all` follows the pages.
+- It only reads. It takes a restricted key or a test key, refuses a live secret key before
+  calling Stripe, and never prints the key. `doctor` checks it.
+- Making the key and what each figure counts: `desks/kit/playbooks/revenue.md`.
+
 ### Work that went out on its own gets checked, and a failed check takes trust away (PRD 13) · New
 - Anyone who didn't do the work can audit it: something sent alone, a number a desk
   reported, a task it closed. The verdict is pass, fail or unsure, with notes and evidence

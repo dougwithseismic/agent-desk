@@ -56,4 +56,49 @@ Reading comes first; writes stay with a person.
 
 ## Implementation Notes
 
-(Filled in after it ships.)
+Built 1 Nov 2026 in the kit: `desk.mjs` only, no schema change.
+
+- **`stripe <path> [name=value ...]`** makes one GET to `DESK_STRIPE_URL` (default
+  `https://api.stripe.com`) + `/v1/<path>`; `--all` pages with `starting_after`, or
+  `next_page` for search, up to 10,000. The one fetch is in `stripeGet`, hard-coded GET.
+  A path is checked against `^[a-z][a-z0-9_]*(/[A-Za-z0-9_]+)*$`, every other argument must
+  be `name=value`, and a first word such as post, delete, cancel or refund is refused with
+  "a change in Stripe is a person's". There is no flag that changes the method.
+- **The key.** `rk_live_`, `rk_test_` or `sk_test_`; `sk_live_` and anything else are refused
+  before a request. A live key goes only to `https://api.stripe.com`, so a stray
+  `DESK_STRIPE_URL` can't send it elsewhere. Stripe's error text is passed through with any
+  key-shaped string replaced by `<key>`. 401 and 403 get their own messages.
+- **Summaries** are small objects in `stripeSummaries`: what they read into rows (one per
+  currency, or one row when `overall`), which fields are money (shown in whole units),
+  whether they have a window, and the one number `--record` saves. `revenue` reads balance
+  transactions (`charge`/`payment` gross, `refund`/`payment_refund` refunds, fees, net);
+  `mrr` reads active and past-due subscriptions and makes each item monthly (day x 365/12,
+  week x 52/12, year / 12, over `interval_count`), skipping tiered and metered items and
+  counting them; `customers` counts customers created in the window and those with a
+  succeeded charge in it; `failed` counts failed charges in the window and open invoices past
+  their due date or charged automatically and failed. Amounts are in whole units, with
+  zero-decimal and three-decimal currencies handled.
+- **`--record <name>`** saves one number in `measures` with the window as dates, a unit
+  (`USD`, `USD/month`, `customers`, `to chase`) and a source such as
+  `stripe revenue --days 28 --currency usd (test mode)`. More than one currency needs
+  `--currency`; a currency with nothing in the window records 0, since a quiet week is a real
+  number. The JSON output gains `recorded`.
+- Flags `stripe` would otherwise ignore are refused: `--limit` (it's `limit=3`), `--days` on
+  `mrr`, `--currency` on `customers`, and `--days`/`--currency`/`--record` on a plain read.
+- `doctor` checks the key and reads `balance_transactions?limit=1` when `DESK_STRIPE_KEY` is
+  set; a desk with `Needs: DESK_STRIPE_KEY` is told when it's missing.
+- Tests run a fake Stripe (`fakeStripe`) with two-object pages, Stripe's error shapes and a
+  request log. Every rule above fails a test when removed (mutation-checked).
+- Extras beyond the PRD: the live-key host rule, three-decimal currencies, `failed` counting
+  automatically charged invoices that failed (they have no due date, so a SaaS on
+  subscriptions would otherwise always show 0).
+- Left after review: a fetch helper shared with `mailFetch` (it takes a method, which would
+  move the GET-only rule out to callers); names for the summaries that can't be Stripe paths
+  (the PRD names them, so `stripe customers` alone is the summary and a pair makes it a
+  plain read); Stripe search or server-side filters for `failed` and `customers`, streaming
+  pages instead of holding up to 10,000 objects, and parallel windows. Those pay off only
+  on accounts with thousands of charges a month.
+- **Open.** Not run against a real Stripe account: no test keys yet (Needs Doug). MRR is
+  before discounts and ignores trials. `failed` can count one failed renewal twice (as a
+  failed charge and as an open invoice), and says so. Balance transactions are in the
+  currency the money settled in, so a sale in euros to a dollar account shows in USD.

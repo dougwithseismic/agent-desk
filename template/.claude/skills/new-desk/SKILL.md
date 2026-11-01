@@ -39,7 +39,8 @@ Don't assume the domain from the project's name.
 ## 2. Look at what's there
 
 - **Data sources.** Skills and tools on this machine (`gcloud` for Search Console and
-  Google Ads, mail tools, browser, platform APIs), scripts in the repo, and exports.
+  Google Ads, `node desks/desk.mjs stripe` for revenue (`kit/playbooks/revenue.md`), mail
+  tools, browser, platform APIs), scripts in the repo, and exports.
   Check each one the desk needs actually answers, read-only. Run one real query and note
   the shape of what comes back.
 - **The things it works on.** Pages, brands, campaigns, people. What's their natural id
