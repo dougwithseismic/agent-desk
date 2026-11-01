@@ -75,7 +75,7 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
       (needs you: a yes to create scheduled tasks in a project, and the mode they run in)
 - [ ] **PRD 17** The affiliates desk type: recruit, onboard and pay affiliates
       (`docs/prds/17-affiliates-desk.md`). Needs 15.
-- [ ] **PRD 18** Starter: Stripe billing per organisation (`docs/prds/18-starter-billing.md`).
+- [~] (merged to the starter's local main 2026-11-01; not pushed, not yet run against Stripe test keys) **PRD 18** Starter: Stripe billing per organisation (`docs/prds/18-starter-billing.md`).
 - [ ] **PRD 19** Starter: the affiliate program (`docs/prds/19-starter-affiliates.md`).
       Needs 18.
 - [ ] **PRD 20** Starter: ships with the kit, a GM and an affiliates desk

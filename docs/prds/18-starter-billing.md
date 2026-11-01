@@ -46,4 +46,21 @@ to.
 
 ## Implementation Notes
 
-(Filled in after it ships.)
+Built 2026-11-01 and merged to the starter's local main (8 commits, not pushed). The full
+notes are in the starter's own `docs/prds/18-billing.md`.
+
+- An own `billing` module rather than Better Auth's Stripe plugin: the plugin doesn't record
+  processed event ids in the same transaction as their effects, which the affiliate
+  commissions (PRD 19) need, and it has no invoice list.
+- Event ids are recorded with their effects in one transaction, older events can't overwrite
+  newer ones, and an `invoicePaid` hook runs inside that transaction for PRD 19 to use.
+- Checks, rerun by the lead: `pnpm verify` with a migrated test database (server 16/16,
+  web, lint, types, build) and `pnpm test:e2e` 16/16.
+
+Open:
+
+- Nothing has talked to Stripe: the event fixtures are hand-written. Record real ones with
+  `stripe listen` and `stripe trigger` once there are test keys.
+- Two checkouts started at once could create two subscriptions.
+- Entitlements are served but not enforced.
+- Not pushed: the starter is public and push needs Doug's yes.
