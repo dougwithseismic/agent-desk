@@ -63,6 +63,14 @@ nobody measured. `status` shows it, with what fixes each. With your yes, each de
 scheduled task in the Claude Code app (`Start:` in its `desk.md`), and the GM starts a desk
 when it has work and nobody is listening.
 
+### An affiliates desk
+
+Say "set up an affiliates desk" and `new-desk` starts from the affiliates type
+(`desks/kit/types/affiliates`). Before the product has a program, it finds people who'd
+recommend it and collects their interest, promising no terms until you set them. Once the
+program is open, it prepares approvals, welcomes affiliates, and once a month prepares one
+payout per affiliate from the commissions and the invoices they rest on. You pay each one.
+
 ## What lands in a project
 
 ```text
@@ -125,6 +133,10 @@ A GM desk (`Type: gm`) prepares briefs and initiatives and nothing else, and an 
 never goes out on its own. A question for the person (a task with source `ask`) closes as
 done only once their answer is in the log, under their name. A GM's bet runs only on a
 check with a baseline, and ends won or lost only as that check says.
+
+On an affiliates desk (`Type: affiliates`), a payout and a terms change are always a person's,
+and nobody loosens that. A payout is for a month that has closed, one per affiliate per month,
+with its amount and the invoices it rests on, and only a person records it as paid.
 
 These guards stop mistakes. They aren't security: an agent that writes a person's name on
 purpose isn't stopped, and anyone with the database can change it.

@@ -1971,7 +1971,7 @@ test('a desk\'s type comes from its Type: line, and doctor says when init hasn\'
   fs.writeFileSync(md, text.replace('Type: gm', 'Type: general manager'));
   const bad = await p.run(['init']);
   assert.equal(bad.code, 1);
-  assert.match(bad.err, /desks\/gm\/desk.md: Type: general manager is not a kit type: use one of gm \(desks\/kit\/types\/\)/);
+  assert.match(bad.err, /desks\/gm\/desk.md: Type: general manager is not a kit type: use one of affiliates, gm \(desks\/kit\/types\/\)/);
   fs.writeFileSync(md, text);
   const pmd = path.join(p.dir, 'desks/partners/desk.md');
   fs.writeFileSync(pmd, fs.readFileSync(pmd, 'utf8').replace('\n\n## Purpose', '\nType: gm\n\n## Purpose'));
@@ -1982,7 +1982,10 @@ test('a desk\'s type comes from its Type: line, and doctor says when init hasn\'
 
 test('a database from before migration 002 gets desk types once', async () => {
   const p = await project(desksForGm);
-  await p.sql(`DROP TRIGGER gm_briefs_only; ALTER TABLE desks DROP COLUMN type;
+  // The triggers that read a desk's type came with it.
+  const typed = await p.sql("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND sql LIKE '%type = ''%'");
+  assert.ok(typed.length >= 5);
+  await p.sql(`${typed.map((t) => `DROP TRIGGER ${t.name};`).join(' ')} ALTER TABLE desks DROP COLUMN type;
     DELETE FROM migrations WHERE name = 'core/002-desk-type.sql'`);
   assert.match((await p.run(['doctor'])).out, /core migration 002-desk-type.sql not applied/);
   const first = await p.run(['init']);
@@ -2003,9 +2006,10 @@ async function gmProject() {
   assert.equal(init.code, 0, init.err);
   return p;
 }
-// The SQL examples in each of the GM's playbooks, in order, so the tests run what the agent reads.
-const gmSql = Object.fromEntries(['round.md', 'decide.md', 'brief.md', 'initiatives.md', 'sessions.md'].map((file) => [file,
-  [...fs.readFileSync(path.join(KIT, 'kit/types/gm/playbooks', file), 'utf8').matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1])]));
+// The SQL examples in each of a type's playbooks, in order, so the tests run what the agent reads.
+const playbookSql = (type, files) => Object.fromEntries(files.map((file) => [file,
+  [...fs.readFileSync(path.join(KIT, 'kit/types', type, 'playbooks', file), 'utf8').matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1])]));
+const gmSql = playbookSql('gm', ['round.md', 'decide.md', 'brief.md', 'initiatives.md', 'sessions.md']);
 // A check with its baseline, and a question for the person, as the GM writes them.
 const gmCheck = async (p, baseline, about = 'bet:x') => (await p.one(`INSERT INTO checks(desk, about, metric, baseline, check_at, created_by)
   VALUES ('gm', ${q(about)}, 'revenue-28d', ${baseline}, date('now'), :me) RETURNING id`, gm)).id;
@@ -2294,4 +2298,143 @@ test('a Start: line says which scheduled task starts the desk', async () => {
   assert.equal(bad.code, 1);
   assert.match(bad.err, /desks\/partners\/desk.md: Start: when Doug says isn't how a desk starts: write Start: scheduled-task <task id>/);
   assert.equal((await p.run(['status'])).code, 0, 'status still runs');
+});
+
+// ---------- the affiliates type ----------
+
+// The affiliates type as new-desk sets it up: copied from kit/types/affiliates, with an agent
+// that works it on its own, beside an seo desk.
+async function affiliatesProject() {
+  const p = await project({ seo: {} }, { init: false });
+  fs.cpSync(path.join(p.dir, 'desks/kit/types/affiliates'), path.join(p.dir, 'desks/affiliates'), { recursive: true });
+  const md = path.join(p.dir, 'desks/affiliates/desk.md');
+  fs.writeFileSync(md, fs.readFileSync(md, 'utf8').replace(/^Type: affiliates$/m, 'Agent: clara\nType: affiliates'));
+  const init = await p.run(['init']);
+  assert.equal(init.code, 0, init.err);
+  return p;
+}
+const affSql = playbookSql('affiliates', ['recruit.md', 'onboard.md', 'payouts.md']);
+const clara = { as: 'clara' };
+const lastMonth = () => { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)).toISOString().slice(0, 7); };
+// A payout as payouts.md writes one, for Sam (approved in onboard.md), last month.
+const payout = (o = {}) => {
+  const month = o.month ?? lastMonth();
+  const about = o.about ?? 'person:sam-lee';
+  return newAction({ desk: 'affiliates', kind: 'payout', channel: 'paypal', identity: 'example.com', about,
+    target: 'affiliate:aff_123', title: 'Pay Sam', body: 'Two commissions', by: 'clara', key: `payout:${about}:${month}`,
+    payload: JSON.stringify({ month, amount: 84, currency: 'usd', invoices: ['in_1', 'in_2'], ...o.payload }), ...o.action });
+};
+const trustStage = async (p, kind, channel) => (await p.one(`SELECT stage FROM trust_board
+  WHERE desk = 'affiliates' AND kind = ${q(kind)}${channel ? ` AND channel = ${q(channel)}` : ''}`))?.stage;
+
+test('an affiliates desk starts from the type, promises no terms, and collects interest before the program opens', async () => {
+  const p = await affiliatesProject();
+  assert.deepEqual(await p.one("SELECT type, headline FROM desks WHERE name = 'affiliates'"), { type: 'affiliates', headline: 'affiliates-earning' });
+  assert.deepEqual(await p.sql('SELECT name, desk FROM agents'), [{ name: 'clara', desk: 'affiliates' }]);
+  const doctor = await p.run(['doctor']);
+  assert.equal(doctor.code, 0, doctor.out);
+
+  // facts.md comes with the program not open, and no number anyone could take for a term.
+  const facts = fs.readFileSync(path.join(p.dir, 'desks/affiliates/facts.md'), 'utf8');
+  assert.match(facts, /^Program: not open yet$/m);
+  assert.doesNotMatch(facts, /[0-9%$£€]/);
+
+  // Found, a first touch, contacted, then a yes: interested, with a task to tell them when it opens.
+  const [found, firstTouch, contacted, interested, opens] = affSql['recruit.md'];
+  await p.sql(found, clara);
+  await p.sql(firstTouch, { ...clara, args: { body: 'We are starting an affiliate program. Would you like to hear when it opens?' } });
+  assert.equal(await trustStage(p, 'first-touch'), 'learning their words (0/2)');
+  await p.sql(contacted, clara);
+  await p.sql(interested, clara);
+  assert.deepEqual(await p.sql('SELECT stage, people FROM affiliates_stages'), [{ stage: 'interested', people: 1 }]);
+  assert.deepEqual(await p.sql("SELECT by, summary FROM log WHERE desk = 'affiliates' AND summary GLOB 'person:*' ORDER BY id"), [
+    { by: 'clara', summary: 'person:jo-bloggs: found > contacted' },
+    { by: 'clara', summary: 'person:jo-bloggs: contacted > interested' },
+  ]);
+  assert.deepEqual(await p.one("SELECT status, due FROM tasks WHERE about = 'person:jo-bloggs'"), { status: 'blocked', due: null });
+
+  // The person opens the program: everyone waiting is due to hear today, and nothing else moves.
+  await p.sql("INSERT INTO tasks(desk, what, about, status, created_by) VALUES ('affiliates', 'Send Jo the deck (blocked: back from leave)', 'person:jo-bloggs', 'blocked', 'clara')");
+  await p.sql(opens, { ...clara, args: { today: today() } });
+  assert.deepEqual(await p.sql("SELECT status, due FROM tasks WHERE about = 'person:jo-bloggs' ORDER BY id"),
+    [{ status: 'open', due: today() }, { status: 'blocked', due: null }]);
+});
+
+test('on an affiliates desk a payout and a terms change are always a person\'s, and a person pays', async () => {
+  const p = await affiliatesProject();
+  const [applied, approval, approved, measure] = affSql['onboard.md'];
+  const [owed, paid, terms] = affSql['payouts.md'];
+
+  // A payout goes only to an approved affiliate.
+  await p.sql(applied, clara);
+  await p.fails(owed, /a payout goes to an approved affiliate/, { ...clara, args: { body: 'x' } });
+
+  // Approving an affiliate is a person's until they allow it, and can earn trust.
+  await p.sql(approval, { ...clara, args: { body: 'Runs a forum of bookkeepers; fits icp.md: community owners.' } });
+  assert.equal(await trustStage(p, 'approve-affiliate'), 'learning their words (0/2)');
+  await p.sql(approved, clara);
+  await p.sql(measure, clara);
+
+  // The month's payout, and a terms change: both always a person, even before trust is touched.
+  await p.sql(owed, { ...clara, args: { body: 'com_88 on in_1Q2w: 40.00; com_91 on in_1Q3x: 44.00. PayPal, from the product.' } });
+  const { id } = await p.one("SELECT id FROM actions WHERE key = 'payout:person:sam-lee:2026-10' AND status = 'waiting'");
+  await p.sql(terms, { ...clara, args: { body: 'From 1 December, new referrals earn 25%.' } });
+  assert.equal(await trustStage(p, 'payout'), 'always a person');
+  assert.equal(await trustStage(p, 'terms-change'), 'always a person');
+
+  // Trust set before any action of the kind comes out the same, and nobody loosens it.
+  await p.sql(`INSERT INTO trust(desk, kind, channel, identity, coach_needed, last_by, note)
+    VALUES ('affiliates', 'payout', 'wise', 'example.com', 0, 'doug', 'just write it')`);
+  assert.equal(await trustStage(p, 'payout', 'wise'), 'always a person');
+  await p.fails(`UPDATE trust SET always_human = 0, last_by = 'doug', note = 'let payouts go' WHERE kind = 'payout' AND channel = 'paypal'`,
+    /a payout or a terms change is always a person's, on an affiliates desk/);
+
+  // Trusted and allowed or not, it never goes out on its own.
+  await p.sql(`UPDATE trust SET coach_needed = 0, trusted = 1, last_by = 'doug', note = 'trust it' WHERE kind = 'payout' AND channel = 'wise';
+    INSERT INTO allowed(desk, kind, channel, identity, words, by) VALUES ('affiliates', 'payout', 'wise', 'example.com', 'let it go', 'doug')`);
+  const wise = (await p.one(payout({ month: '2026-09', action: { channel: 'wise', status: 'draft' } }))).id;
+  await p.fails(claim(wise, 'auto'), /not trusted to go out on its own yet/);
+
+  // The person approves; only they record it as paid.
+  await p.sql(approve(id), clara);
+  await p.fails(claim(id, 'human', 'clara'), /a person pays a payout: once they have, record it sent under their name/, clara);
+  await p.sql(paid, { ...clara, args: { id, ref: 'PAYPAL-7X' } });
+  assert.deepEqual(await p.one(`SELECT status, sent_by, provider_ref FROM actions WHERE id = ${id}`),
+    { status: 'sent', sent_by: 'doug', provider_ref: 'PAYPAL-7X' });
+});
+
+test('a payout is one per affiliate per closed month, and says what it pays', async () => {
+  const p = await affiliatesProject();
+  const [applied, , approved] = affSql['onboard.md'];
+  await p.sql(applied, clara);
+  await p.sql(approved, clara);
+
+  await p.sql(payout());
+  await p.fails(payout(), /UNIQUE constraint failed: actions.key/);
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  await p.fails(payout({ month: thisMonth }), /a payout is for a month that has closed/);
+  await p.fails(payout({ month: '2025-9' }), /a payout is for a month that has closed/);
+  await p.fails(payout({ month: '2026-08', action: { key: 'payout:sam:2026-08' } }), /one payout per affiliate per month: its key is payout:<about>:<month>/);
+  for (const bad of [{ amount: 0 }, { amount: '84' }, { currency: 'dollars' }, { invoices: [] }, { invoices: 'in_1' }]) {
+    await p.fails(payout({ month: '2026-08', payload: bad }), /a payout says what it pays/);
+  }
+
+  // To someone approved, whom the product knows.
+  await p.fails("INSERT INTO affiliates_people(key, fit) VALUES ('jo', 'x')", /CHECK constraint failed/);
+  await p.sql("INSERT INTO affiliates_people(key, fit, stage) VALUES ('person:jo', 'x', 'approved')");
+  await p.fails(payout({ month: '2026-08', about: 'person:jo' }), /a payout goes to an approved affiliate/);
+
+  // Elsewhere, a payout is just a kind like any other.
+  await create(p, { kind: 'payout' });
+  assert.equal((await trustRow(p, 'payout')).always_human, 0);
+});
+
+test('a desk that becomes an affiliates desk gets its payouts back to a person', async () => {
+  const p = await project({ affiliates: {} });
+  await create(p, { desk: 'affiliates', kind: 'payout' });
+  assert.equal((await trustRow(p, 'payout', 'affiliates')).always_human, 0);
+  fs.cpSync(path.join(p.dir, 'desks/kit/types/affiliates'), path.join(p.dir, 'desks/affiliates'), { recursive: true });
+  const init = await p.run(['init']);
+  assert.equal(init.code, 0, init.err);
+  assert.equal((await trustRow(p, 'payout', 'affiliates')).always_human, 1);
 });

@@ -4,6 +4,21 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-01
 
+### An affiliates desk recruits, onboards and pays affiliates (PRD 17) · New
+- Say "set up an affiliates desk" and `new-desk` starts from the affiliates type. It asks
+  whether the product has a program yet, who makes a good affiliate, the desk's own address
+  and how you pay, and writes your terms down only if you've set them.
+- Before the program opens, the desk finds people who'd recommend the product and asks
+  whether they'd like to hear when it opens, promising no rates or dates. Each yes joins a
+  waitlist, and everyone on it hears when you open the program.
+- Once the program is open, it prepares each approval for you, welcomes approved affiliates
+  with their link, and tracks who's earning.
+- After each month closes, it prepares one payout per affiliate from the commissions owed
+  and the invoices they rest on. You approve and pay each one, and only you can record it
+  as paid.
+- A payout and a terms change always go to you, however much trust the desk earns.
+- Try it: "set up an affiliates desk" in a project with the kit.
+
 ### A watchdog for stalled work, and a GM that starts desks (PRD 16) · New
 - `status` now has a "Stalled" list, with what fixes each item:
   - a desk with work for its agent, or a missed round, and nobody listening;

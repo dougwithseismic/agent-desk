@@ -49,8 +49,9 @@ Don't assume the domain from the project's name.
 - **Other desks in this project.** Share their people, contacts, holds and log; don't
   duplicate them.
 - **Types.** `desks/kit/types/` holds starting desks with blanks to fill. `gm` is the desk
-  that runs a business towards money and runs its other desks ("A GM" below). Start from a
-  type when one fits; the desk you make from it is theirs to change.
+  that runs a business towards money and runs its other desks ("A GM" below). `affiliates`
+  recruits, onboards and pays affiliates ("An affiliates desk" below). Start from a type when
+  one fits; the desk you make from it is theirs to change.
 
 ## 3. Propose the desk
 
@@ -131,6 +132,32 @@ Set it up in the same conversation, one thing at a time:
 
 Then `init`, `doctor`, and one round with them (`playbooks/round.md`), ending with their
 first brief. Its questions are how you check the mandate is right.
+
+## An affiliates desk
+
+An affiliates desk finds people who'd recommend the product, asks them to be affiliates,
+onboards them and prepares their payouts: `desks/kit/types/affiliates/desk.md` says what it
+does. Its desk is `desks/affiliates`, copied from that type. It works before the program
+exists, collecting interest, and after, running it.
+
+Set it up in the same conversation, one thing at a time:
+
+- **Is there a program yet?** If the product has one (the starter's affiliate pages, or
+  another), where applications, affiliates and commissions are read, read-only, and the
+  token's name in `Needs:`. If not, the desk starts by collecting interest, and needs nothing
+  to read yet.
+- **The terms**, only if they've set them: into `facts.md` in their words, with the date.
+  Otherwise `facts.md` stays as it comes, the program starting and no numbers. Never suggest
+  terms for them to accept.
+- **Who makes a good affiliate** (`icp.md`): the kinds of people, the signs they fit, who not
+  to ask, and where to look. Ask what they've seen work.
+- **Its address.** Its own, on a subdomain (see "Mail" above), never their inbox.
+- **Payouts**: how they pay (bank, PayPal, Wise) and from which account, for the payout
+  row in `desk.md`. A payout and a terms change are always theirs; the database keeps them so.
+- **Limits**: first touches a day, and the wait before the one follow-up.
+
+Then `init`, `doctor`, and one round with them: find three people who fit, and show the first
+touches for them to change.
 
 ## 5. Do one real round
 

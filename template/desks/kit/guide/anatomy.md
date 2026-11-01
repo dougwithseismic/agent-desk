@@ -52,7 +52,7 @@ Needs: <environment variables the round uses>
 Mail: <the desk's own email addresses, if it answers mail>
 Round: <when its round is due, if it runs on a schedule: weekdays 09:00>
 Agent: <the name its agent works under, if it has one: gm>
-Type: <the kind of desk, when the database treats it differently: gm>
+Type: <the kind of desk, when the database treats it differently: gm, affiliates>
 Start: <the scheduled task that starts it, if the GM starts it: scheduled-task partners-desk>
 
 ## Purpose
@@ -98,8 +98,9 @@ tell it from the person's say-so (what that changes is in the desk skill). Give 
 no person uses. Leave the line out and the agent works as the person. Add it once the desk
 works without a person in the chat.
 
-`Type:` is for a desk the database treats differently. `init` records it, and today one type
-means something: a `gm` desk prepares briefs and initiatives and nothing else. Types also
+`Type:` is for a desk the database treats differently. `init` records it, and today two
+types mean something: a `gm` desk prepares briefs and initiatives and nothing else, and an
+`affiliates` desk's payouts and terms changes always go to a person. Types also
 come with a starting desk in `kit/types/<type>/`: its `desk.md`, `schema.sql`, playbooks and
 any files it needs, with blanks the setup conversation fills (`new-desk`).
 

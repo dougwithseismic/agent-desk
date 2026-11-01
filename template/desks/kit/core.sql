@@ -963,6 +963,42 @@ DROP TRIGGER IF EXISTS initiative_waits;
 CREATE TRIGGER initiative_waits BEFORE UPDATE OF status ON actions
 WHEN NEW.status = 'sending' AND NEW.mode IS 'auto' AND OLD.channel = 'gm'
 BEGIN SELECT RAISE(ABORT, 'an initiative always waits for the person: show it and ask'); END;
+
+-- An affiliates desk (kit/types/affiliates) pays people and sets what they're paid. A payout
+-- and a terms change are always a person's, on any channel: the trust row is made so when it
+-- appears, and nobody loosens it. A payout is one action per affiliate per closed month,
+-- saying what it pays and the invoices it rests on, and a person pays it.
+DROP TRIGGER IF EXISTS affiliates_money_human;
+CREATE TRIGGER affiliates_money_human AFTER INSERT ON trust
+WHEN NEW.always_human = 0 AND NEW.kind IN ('payout', 'terms-change')
+  AND EXISTS (SELECT 1 FROM desks WHERE name = NEW.desk AND type = 'affiliates')
+BEGIN
+  UPDATE trust SET always_human = 1
+    WHERE desk = NEW.desk AND kind = NEW.kind AND channel = NEW.channel AND identity = NEW.identity;
+END;
+DROP TRIGGER IF EXISTS affiliates_money_stays;
+CREATE TRIGGER affiliates_money_stays BEFORE UPDATE OF always_human ON trust
+WHEN NEW.always_human = 0 AND NEW.kind IN ('payout', 'terms-change')
+  AND EXISTS (SELECT 1 FROM desks WHERE name = NEW.desk AND type = 'affiliates')
+BEGIN SELECT RAISE(ABORT, 'a payout or a terms change is always a person''s, on an affiliates desk'); END;
+DROP TRIGGER IF EXISTS affiliates_payout;
+CREATE TRIGGER affiliates_payout BEFORE INSERT ON actions
+WHEN NEW.kind = 'payout' AND EXISTS (SELECT 1 FROM desks WHERE name = NEW.desk AND type = 'affiliates')
+BEGIN
+  SELECT RAISE(ABORT, 'a payout is for a month that has closed: payload.month is YYYY-MM, before this month')
+    WHERE NOT coalesce(json_extract(NEW.payload, '$.month') GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]'
+      AND json_extract(NEW.payload, '$.month') < strftime('%Y-%m', 'now'), 0);
+  SELECT RAISE(ABORT, 'one payout per affiliate per month: its key is payout:<about>:<month>')
+    WHERE NEW.key IS NOT 'payout:' || NEW.about || ':' || json_extract(NEW.payload, '$.month');
+  SELECT RAISE(ABORT, 'a payout says what it pays: payload.amount above 0, payload.currency, and the payload.invoices it rests on')
+    WHERE NOT coalesce(json_type(NEW.payload, '$.amount') IN ('integer', 'real') AND json_extract(NEW.payload, '$.amount') > 0
+      AND length(json_extract(NEW.payload, '$.currency')) = 3 AND json_array_length(NEW.payload, '$.invoices') > 0, 0);
+END;
+DROP TRIGGER IF EXISTS affiliates_payout_paid;
+CREATE TRIGGER affiliates_payout_paid BEFORE UPDATE OF status ON actions
+WHEN NEW.status = 'sending' AND OLD.kind = 'payout' AND NEW.sent_by IN (SELECT name FROM agents)
+  AND EXISTS (SELECT 1 FROM desks WHERE name = OLD.desk AND type = 'affiliates')
+BEGIN SELECT RAISE(ABORT, 'a person pays a payout: once they have, record it sent under their name (payouts.md)'); END;
 DROP TRIGGER IF EXISTS task_stays;
 CREATE TRIGGER task_stays BEFORE UPDATE OF desk ON tasks WHEN NEW.desk IS NOT OLD.desk
 BEGIN SELECT RAISE(ABORT, 'a task stays on its desk: drop it here and brief the other desk'); END;

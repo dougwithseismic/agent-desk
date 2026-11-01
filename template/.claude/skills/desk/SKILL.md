@@ -26,6 +26,9 @@ The database does the guarding. It refuses:
   loosening trust, or giving another desk a task other than through a brief;
 - a GM desk (`Type: gm`) doing anything but brief and propose, and an initiative going out
   on its own;
+- on an affiliates desk (`Type: affiliates`), a payout or terms change going out on its own,
+  a payout for a month still running or without its invoices, or one recorded as paid by an
+  agent;
 - a question for the person (a task with source `ask`) closed as done before their answer
   is logged under their name.
 
@@ -66,7 +69,8 @@ When it refuses, read the message and do what it says. Never work around it.
 
 A desk's own `playbooks/` folder, if it has one, covers what it does differently. A GM
 desk's playbooks (`desks/gm/playbooks/`) are its round, its decisions, the person's brief,
-initiatives, and starting desks (`sessions.md`).
+initiatives, and starting desks (`sessions.md`). An affiliates desk's are recruiting,
+onboarding, and payouts with terms changes.
 
 ## The round
 
