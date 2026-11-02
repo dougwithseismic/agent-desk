@@ -47,8 +47,8 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
 - [ ] A failed audit takes the audited kind's trust away; an agent can't audit its own work.
 - [ ] The person's daily brief comes from the GM's round, with numbered questions, and their
       answers are recorded as decisions.
-- [ ] In the Claude Code app, the GM starts a desk's listening session from its scheduled task
-      with no click, and the log says so. (needs you: a yes to create the first tasks)
+- [x] In the Claude Code app, the GM starts a desk's listening session from its scheduled task
+      with no click, and the log says so. (tried live 2026-11-02, bypass mode)
 - [ ] The starter: a stranger subscribes through Stripe Checkout (test mode), an affiliate's
       link earns its commission when the invoice is paid, and the starter ships with a GM and
       an affiliates desk reading its own data.
@@ -71,9 +71,8 @@ Decided 1 Nov (`docs/DECISIONS.md`, "A GM runs the business"). Goes before the r
 - [x] **PRD 14** Stripe as a source, read-only (`docs/prds/14-stripe.md`).
 - [x] **PRD 15** The GM desk type, and desk types in the kit (`docs/prds/15-gm-desk.md`).
       Needs 11–14.
-- [~] (kit built 2026-11-01; not yet tried live in a project) **PRD 16** The GM starts desks' sessions, and a watchdog for stalled work
+- [~] (kit built 2026-11-01; tried live 2026-11-02 in bypass mode, with what the app did in the PRD's notes; auto mode not yet seen) **PRD 16** The GM starts desks' sessions, and a watchdog for stalled work
       (`docs/prds/16-sessions.md`). Needs 15. The watchdog view can land before the rest.
-      (needs you: a yes to create scheduled tasks in a project, and the mode they run in)
 - [~] (kit built 2026-11-01; not yet run against a real affiliate program, which waits on 19) **PRD 17** The affiliates desk type: recruit, onboard and pay affiliates
       (`docs/prds/17-affiliates-desk.md`). Needs 15.
 - [~] (pushed to the starter's main 2026-11-01; not yet run against Stripe test keys) **PRD 18** Starter: Stripe billing per organisation (`docs/prds/18-starter-billing.md`).
@@ -119,8 +118,8 @@ they're claimed.
 - **Stripe keys.** A restricted read-only key per business, made in the Stripe Dashboard
   (`kit/playbooks/revenue.md` once 14 lands: which permissions to tick). Unblocks the GM
   reading real revenue; test mode needs nothing from you.
-- **Scheduled tasks.** A yes to create one on-demand task per desk in a project, and whether
-  they run in auto or bypass mode. Unblocks 16.
+- **Scheduled tasks.** Given for one project on 2 Nov 2026, in bypass mode. Seeing auto mode
+  needs a project whose tasks run in it.
 - **Affiliate terms.** Commission rate, cookie length, payout minimum and how you pay, per
   product. Desks can recruit interest before this, but promise no numbers until it's set.
 

@@ -2,6 +2,19 @@
 
 What changed in the desk kit, newest first. Update a project with `node bin/kit.mjs <project>`.
 
+## 2026-11-02
+
+### Desks' scheduled tasks set up right the first time · Fixed
+- The GM's own day ran an hour late: the app reads a task's cron as UTC, not local time. The
+  GM now checks the next run against your time after making it, sets the hour to match, and
+  notes that it moves when the clocks change.
+- Tasks that had been deleted or never reached the app's list blocked their own names, so the
+  app handed out `-2` ids instead. The GM now clears the old folder and makes the task again
+  under its own name, and it remakes a task the app can't find when it tries to start a desk.
+- A desk's `Start:` line counts only once it's committed: `status` reads it from the files
+  where it runs.
+- Task ids name the project as well as the desk, since every project on a machine shares them.
+
 ## 2026-11-01
 
 ### The GM talks you through its brief in the chat · Improved

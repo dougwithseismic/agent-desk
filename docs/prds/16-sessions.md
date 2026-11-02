@@ -75,8 +75,26 @@ headline nobody measured. Nothing looks for those unless a person does.
 
 ## Implementation Notes
 
-Built 1 Nov 2026 in the kit: tasks 1 to 3. Task 4, trying it live in a project, waits for the
-person's yes to create scheduled tasks there.
+Built 1 Nov 2026 in the kit: tasks 1 to 3. Task 4 tried live on 2 Nov 2026 in one project,
+with the person's yes, in bypass mode: the GM started two desks with `run_scheduled_task`, with
+no click, and logged both starts (AC 1). What the app did, now in `sessions.md`:
+
+- **Cron runs as UTC.** `create_scheduled_task` says its cron is local time, but on a machine in
+  Prague `30 8 * * 1-5` came back with `nextRunAt` 08:42 UTC (09:42 in Prague), and a one-off
+  task's run started at the UTC time it was given. `30 7` gives 08:30 in Prague in winter. The
+  app added 765 seconds to each run.
+- **Deleting a task leaves its folder**, `~/.claude/scheduled-tasks/<id>/`, and the folder keeps
+  the id: `create_scheduled_task` refuses it and offers `<id>-2`. Titles must also differ from
+  every listed task's.
+- **A task can be on disk and not in the app's list.** Five tasks made in one chat had folders
+  but never reached the list, and `run_scheduled_task` said they weren't found. Made again
+  under their ids, they ran.
+- **`Start:` is read from disk where `status` runs.** Uncommitted lines in one checkout didn't
+  show from a worktree of the same project, so that GM saw no tasks.
+- **Runs work in the project's own folder,** even when the task was made from a worktree chat.
+- **A session keeps running after its task is deleted.**
+- The mode: a task made from a chat in bypass mode was saved in bypass. Made from another chat,
+  the five lost tasks had been saved without the mode the person chose.
 
 - **`unheard`** (core view): desks nobody is listening to, meaning no `listen:` lock, or a listener
   that hasn't looked for 15 minutes (the same rule `status` already used). Its `fix` says to start
@@ -111,8 +129,8 @@ person's yes to create scheduled tasks there.
 
   18 one-change mutations, all caught.
 - **Open:**
-  - Not tried live (task 4). Two things to record then: what `run_scheduled_task` does when the
-    app is busy, and whether an auto-mode task stalls on its first tool approval.
+  - Not yet seen live: what `run_scheduled_task` does when the app is busy, and whether an
+    auto-mode task stalls on its first tool approval (the first live try used bypass).
   - A listening chat busy for more than 15 minutes on a long round doesn't update its listener,
     so it reads as nobody listening. A start then is refused if the task is already running,
     and the new session stops when it sees the listener in `status`. It still costs a session,

@@ -106,7 +106,8 @@ any files it needs, with blanks the setup conversation fills (`new-desk`).
 
 `Start:` names the app's scheduled task that opens the desk listening, for a GM that starts
 desks when they have work and nobody is listening (`kit/types/gm/playbooks/sessions.md`).
-`status` shows it. Leave it out and the person opens the desk.
+`status` shows it, read from the `desk.md` where it runs, so commit the line. Leave it out and
+the person opens the desk.
 
 ## schema.sql: the desk's own tables
 
