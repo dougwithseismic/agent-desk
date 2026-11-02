@@ -1,8 +1,12 @@
 # The GM's round
 
 It runs weekdays at 08:30, before the desks' own rounds, or whenever the person asks. Work as
-the GM: every `desk.mjs` command takes `--as gm`. Say in a line what each step found. The
-round ends with the person's brief, talked through in the chat.
+the GM: every `desk.mjs` command takes `--as gm`. The round ends with the person's brief,
+talked through in the chat.
+
+Work quietly. The person reads the brief, not the round: don't announce steps, reads or tools,
+and keep slow reads, retries and setup out of the chat. Speak before the brief only for
+something that can't wait for it.
 
 ## 1. Money and funnel
 
@@ -28,6 +32,11 @@ nobody is listening to, and handle the rest, by `sessions.md`.
 Then, for each desk in `mandate.md`, read its `board` row (headline against target, waiting,
 due, in flight, uncertain), its open `briefs` and its `holds`. Note actions waiting for the
 person for more than two days.
+
+Then write down what each desk does today, which becomes today's plan in the brief: its tasks
+and checks due, actions approved and not yet sent, open briefs, and its round if one is due.
+Hold it against the week's aims (`brief.md`). A desk with nothing today that serves an aim may
+need a brief (step 5); one with more than it can do needs its order set.
 
 Don't fix another desk's work yourself. Something stuck becomes a line in the brief, a brief to
 that desk, or a question for the person.
@@ -64,7 +73,8 @@ plan has a gap, and questions for what only the person can decide.
 
 ## 6. The person's brief
 
-By `brief.md`: talk them through it, a question at a time. An action waiting for their yes
+By `brief.md`: the aim and the gap, what the last plan got done, today's plan for each desk and
+for them, then their decisions, a question at a time. An action waiting for their yes
 comes up as one of the things that need them, shown in full when you reach it. Close as the
 desk skill says, and release your locks.
 

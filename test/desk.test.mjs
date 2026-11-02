@@ -2162,15 +2162,21 @@ test('a GM round, in a project with two desks and a fake Stripe', async () => {
   assert.deepEqual(await p.sql("SELECT desk, kind FROM waiting WHERE desk = 'gm'"), [{ desk: 'gm', kind: 'initiative' }]);
   assert.deepEqual(await p.one("SELECT stage FROM trust_board WHERE kind = 'initiative'"), { stage: 'always a person' });
 
-  // 6. The person's brief: two questions as tasks they own, numbered in the log; "2 yes".
-  const [ask, note, find, answer] = gmSql['brief.md'];
+  // 6. The person's brief: two questions as tasks they own, numbered in the log with the
+  // week's aims and today's plan, which the next brief reads back; "2 yes".
+  const [ask, last, note, find, answer] = gmSql['brief.md'];
   await p.sql(ask, gm);
   await gmAsk(p, 'Start the affiliate program? Yes: I brief a builder. No: it stays a bet.');
   const asks = (await p.sql("SELECT id, owner, created_by FROM tasks WHERE source = 'ask' ORDER BY id", gm));
   assert.deepEqual(asks.map((t) => [t.owner, t.created_by]), [['doug', 'gm'], ['doug', 'gm']]);
+  assert.deepEqual(await p.sql(last, gm), []);
   const opening = 'Revenue is 1,240 of 3,000 a month, up 180 since Monday. The affiliate bet is what matters this week.';
-  await p.sql(note, { ...gm, args: { said: opening, questions: JSON.stringify(asks.map((t) => t.id)) } });
+  const aims = ['first affiliate signed by Friday'];
+  const plan = ['outreach: the 12 first emails to creators', 'you: the payout terms'];
+  await p.sql(note, { ...gm, args: { said: opening, aims: JSON.stringify(aims), plan: JSON.stringify(plan), questions: JSON.stringify(asks.map((t) => t.id)) } });
   assert.equal((await p.one("SELECT summary FROM log WHERE about GLOB 'gm-brief:*'", gm)).summary, opening);
+  const read = await p.one(last, gm);
+  assert.deepEqual([JSON.parse(read.aims), JSON.parse(read.plan)], [aims, plan]);
   const { task } = await p.one(find, gm);
   assert.equal(task, asks[1].id);
   await p.sql(answer, { ...gm, args: { task, words: '"2 yes"' } });

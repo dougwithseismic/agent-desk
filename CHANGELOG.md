@@ -4,6 +4,17 @@ What changed in the desk kit, newest first. Update a project with `node bin/kit.
 
 ## 2026-11-02
 
+### The GM's brief is about the aims and today's plan · Improved
+- The brief now starts with the aim: the goal, the gap to the target in plain numbers, and up
+  to three aims for the week, each a number by a date. Then what got done of the last plan,
+  today's plan for each desk and for you, and your decisions one at a time. Audits that
+  passed, sessions started and other housekeeping come up only when you ask, or when they
+  stop part of the plan.
+- The GM records each brief's aims and plan, and the next brief checks the plan against what
+  happened.
+- The GM's round and every desk work quietly: no announcing steps, reads or tools. A desk
+  opens with its target, what's left, and what it does today.
+
 ### Desks' scheduled tasks set up right the first time · Fixed
 - The GM's own day ran an hour late: the app reads a task's cron as UTC, not local time. The
   GM now checks the next run against your time after making it, sets the hour to match, and

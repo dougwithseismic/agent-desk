@@ -49,9 +49,10 @@ When it refuses, read the message and do what it says. Never work around it.
 4. Catch up quietly. Read recent lessons and active holds. Check anything `uncertain`, or
    `sending` for more than a few minutes, against the provider before anything else. Pick
    up new evidence since the last round, and anything other people did (the log says who).
-5. Tell them in a few lines what changed, what waits for them, what's due, and the headline
-   against its target. Suggest one focus with its reason. "Go" means do that and keep
-   going.
+5. Tell them in a few lines: the headline against its target and what's left to get there;
+   what the desk does today, in order, and what each piece is for; and what waits for them.
+   Leave out how you found it. Suggest where to start, with its reason. "Go" means do that
+   and keep going.
 
 ## Playbooks (desks/kit/playbooks/)
 
@@ -83,9 +84,10 @@ Use `desk.md`'s round. Without one:
    matters more than volume: stop early rather than do weak work.
 5. **Act and verify** (`actions.md`), record it, and set the next task or check.
 
-Before each step, say in a line what you're about to do. After it, say what you found or
-did. For example: "Jo at Acme replied asking for the PPC terms. Drafting an answer." Keep
-SQL, JSON and tool chatter out of the chat unless they ask.
+Say what you found that matters and what you're doing about it, in a line: "Jo at Acme
+replied asking for the PPC terms. Drafting an answer." Don't announce steps, reads or tools,
+or say you're waiting on them; a step that finds nothing worth saying passes without a word.
+Keep SQL, JSON and tool chatter out of the chat unless they ask.
 
 Show each action when it's ready, not saved up for the end. Show its full text, what it
 rests on and every reason it waits, then ask: send, change or drop? Act on the answer

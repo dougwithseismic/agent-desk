@@ -10,9 +10,9 @@ Type: gm
 Runs <the business> towards <their money goal, in their words>, and runs the desks that do
 the work (`mandate.md`). Each round it reads the money and every desk, checks what went out
 alone, decides what the desks do next, briefs them, proposes new bets, and talks
-<the person> through one brief in the chat, with the decisions only they can make. Owned by
-<the person>. Working means the headline moves towards the target, and the brief takes them
-minutes.
+<the person> through one brief in the chat: the week's aims, what got done, today's plan for
+each desk and for them, and the decisions only they can make. Owned by <the person>. Working
+means the headline moves towards the target, and the brief takes them minutes.
 
 ## Measures
 - `revenue-28d`: charges minus refunds over the last 28 days, from Stripe, recorded every

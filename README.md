@@ -54,8 +54,9 @@ Stripe stay with a person (`desks/kit/playbooks/revenue.md`).
 Say "set up a GM" and `new-desk` starts from the GM type (`desks/kit/types/gm`). The GM runs
 the business towards a money target and runs the other desks. Each round it records revenue
 from Stripe and reads every desk. It audits what went out alone, checks its bets, and briefs
-the desks on what to do next. Then it talks you through one brief in the chat, a yes-or-no
-question at a time, so you can discuss each one. It briefs; it doesn't do (see the guards
+the desks on what to do next. Then it talks you through one brief in the chat: the week's
+aims and the gap to the target, what got done of the last plan, today's plan for each desk and
+for you, and a yes-or-no question at a time, so you can discuss each one. It briefs; it doesn't do (see the guards
 below).
 
 A watchdog notices stalled work without anyone looking: a desk with work and nobody listening,

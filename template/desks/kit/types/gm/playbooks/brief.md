@@ -1,33 +1,55 @@
 # The person's brief
 
-Once a round, the GM talks the person through where the business stands and what it needs
-from them, here in the chat. It's a conversation, not a report: no file to open, no headings,
-no tables or code blocks. They can ask about any part, push back, or answer in their own
-words, and the GM answers before going on.
+Once a round, the GM talks the person through what we're aiming for, what gets done today and
+by whom, and what it needs from them, here in the chat. It's a conversation, not a report: no
+file to open, no headings, no tables or code blocks. They can ask about any part, push back, or
+answer in their own words, and the GM answers before going on.
+
+It's about the business, not the machinery. How the GM got its numbers, which reads were slow,
+which sessions it started or set up, locks, and audits that passed aren't the brief unless they
+change today's plan. The person should come away knowing what we're trying to do, what happens
+today and who does it, and what they have to decide.
 
 ## How it goes
 
-1. **Where things stand**, in two or three sentences: the headline against its target, what
-   moved since the last brief, and the one thing that matters most right now. A failed audit,
-   or something stuck for days, belongs here too.
-2. **What needs them**, one thing at a time, most money first. Ask one question and wait.
-   When they answer, record it and act on it (Answers, below), then go on to the next. A
-   question they want to think about stays open: say so and move on. After the questions,
-   the things only they can do, a line each, with what each unblocks.
-3. **The rest when they ask.** The desks one by one, what went out alone and the audits,
-   holds the GM placed, briefs closed, desks it started, the watchdog's rows. Offer it in a
-   line ("partners is at 3 of 10, seo is up to 112 clicks, ppc has no numbers yet: want the
-   detail?") and go into any of it when they ask.
+1. **The aim**, in two or three sentences: the goal in the mandate's words, the headline
+   against its target, and the gap in plain numbers ("0 of 3,500 Kč, 59 days left"). Then this
+   week's aims (Aims, below), each with where it stands.
+2. **The last plan**: what the last brief said would happen, and what did, a line each. Say
+   why anything didn't, and whether it moves to today. Skip it on the first brief.
+3. **Today**, most money first: what each desk does today and which aim it serves, one to three
+   things a desk, named by what they are ("Clara sends the 20 first emails to movers, for the
+   first-paid-place aim"). Then what only the person can do today, a line each, with what it
+   unblocks. A desk with nothing today that moves an aim gets no line. A failed audit, a pause,
+   or anything stuck that stops part of the plan goes here, with what it stops.
+4. **What needs them**, one question at a time, most money first. Ask and wait. When they
+   answer, record it and act on it (Answers, below), then go on to the next. A question they
+   want to think about stays open: say so and move on.
+5. **The rest when they ask**: the desks one by one, what went out alone and the audits, holds,
+   briefs closed, desks started, the watchdog's rows. Offer it in one line ("audits all passed,
+   seo is at 112 clicks: want the detail?") and go into any of it when they ask.
 
 Talk the way you would to them across a desk. Short sentences, plain words. Name work by what
-it is ("the 20 first emails to movers"), with an id after it when they might look it up.
+it is, with an id after it when they might look it up.
 
 - Every number comes from `measures`, never from memory. A number missing today says so, and
-  why.
-- "Since the last brief" is since the last brief's log row (below): `went_alone` and `briefs`
-  after its time. Fails and unsures come from `audit_findings`.
+  why, in a line.
+- Today's plan comes from each desk's due tasks and checks, actions approved and not yet sent,
+  open briefs and its round (`round.md`, step 2). Plan only what a desk can do today; what waits
+  on the person is theirs.
+- What went out alone since the last brief is `went_alone` after its time; fails and unsures
+  come from `audit_findings`.
 - If they aren't in the chat when the round ends, the questions wait as their tasks, and the
   brief starts when they next speak.
+
+## Aims
+
+This week's aims say what the goal needs by the end of the week: at most three, each a number
+by a date, each closing part of the gap or unblocking what will ("the first paid place signed
+by Friday", "ppc's first cost per alert read, under 100 Kč"). Set them in the week's first
+brief, from the running bets, the weakest funnel step and each desk's next step to its target,
+and say why each. Keep them all week. In the week's last brief, say which were met and what
+that taught us. The person can change them: their words are the aims.
 
 ## Questions
 
@@ -42,16 +64,30 @@ VALUES ('gm', 'Raise the annual plan from $240 to $290? Yes: once you change it 
 - One decision per question, answerable yes or no. Say what each answer does, then your
   recommendation and why, in a line.
 - Number the open questions afresh in each brief, oldest first, and keep the numbers when you
-  ask them, so that "2 yes" finds the right one even when they answer several at once. Record
-  the brief before you start, with what you said in step 1 and the questions in order:
+  ask them, so that "2 yes" finds the right one even when they answer several at once.
+
+## Recording the brief
+
+Before you talk, read the last brief's aims and plan:
+
+```sql
+SELECT about, json_extract(details, '$.aims') AS aims, json_extract(details, '$.plan') AS plan
+FROM log WHERE desk = 'gm' AND about GLOB 'gm-brief:*' ORDER BY about DESC, id DESC LIMIT 1;
+```
+
+Then record this brief: what you'll say in step 1, the week's aims, today's plan and the open
+questions in the order you numbered them.
 
 ```sql
 INSERT INTO log(desk, by, kind, about, summary, details)
-VALUES ('gm', :me, 'note', 'gm-brief:' || :today, :said, json_object('questions', json(:questions)));
+VALUES ('gm', :me, 'note', 'gm-brief:' || :today, :said,
+  json_object('aims', json(:aims), 'plan', json(:plan), 'questions', json(:questions)));
 ```
 
-with `-a said='<your two or three sentences>' -a questions=[41,44,45]`, the open questions'
-task ids in the order you numbered them.
+with `-a said='<your two or three sentences>'`,
+`-a aims='["first paid place signed by Fri 6 Nov"]'`,
+`-a plan='["partners: the 20 first emails to movers (#360-379)", "you: the 490 Kč product in Stripe"]'`
+and `-a questions=[41,44,45]`, the open questions' task ids.
 
 ## Answers
 
